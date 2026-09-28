@@ -15,6 +15,7 @@ from matplotlib.collections import QuadMesh
 from matplotlib.image import AxesImage
 
 from pynbodyext.core.calculate import Bin1D
+from pynbodyext.core.calculate.bins.arrays import BinsArray
 from pynbodyext.plot.image import ImageData
 
 
@@ -198,14 +199,20 @@ def test_masks_can_be_taken_from_an_image() -> None:
     assert bool(np.isfinite(blurred.data).any())
 
 
-def test_a_mask_cut_from_a_binned_array_gets_the_orientation_hint() -> None:
-    """Comparing a BinsArray drops its type, so only the hint can save the user."""
+def test_a_mask_cut_from_a_binned_array_keeps_its_orientation() -> None:
+    """A comparison keeps the type, so the mask arrives knowing which way it faces.
+
+    It used to come out as a plain ``(x, y)`` array, where only the transposition
+    hint could save the caller; a ``BinsArray`` is recognised and turned round.
+    """
     bins = make_bins(make_sim())
     velocity = ImageData.from_bins(bins, "vz.mean")
-    mask = bins["mass.sum"] > 0.0  # a plain (x, y) array by now
+    mask = bins["mass.sum"] > 0.0
 
-    with pytest.raises(ValueError, match="transpos"):
-        velocity.process.smooth.box(size=3, mask=mask)
+    assert isinstance(mask, BinsArray)
+    blurred = velocity.process.smooth.box(size=3, mask=mask)
+
+    assert blurred.shape == velocity.shape
 
 
 # ---------------------------------------------------------------------------

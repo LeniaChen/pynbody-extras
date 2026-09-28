@@ -87,6 +87,7 @@ profile["count"]              # particles per bin
 profile["vz.mean"]            # the `mean` of the `vz` array
 profile["vz.abs.mean@mass"]   # transform |vz|, then the mass-weighted mean
 profile["mass.sum"].plot()
+(profile["mass.sum"] / profile["count"]).plot()  # arithmetic keeps the type: still a map
 
 profile.star                  # the same bins, star particles only
 profile[Sphere("30 kpc") & FamilyFilter("star")]  # the same bins, one subset
