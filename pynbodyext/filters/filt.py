@@ -3,22 +3,21 @@ from typing import Any, TypeAlias
 import numpy as np
 from pynbody.array import SimArray
 from pynbody.family import Family, get_family
+from pynbody.filt import (
+    Annulus as _Annulus,
+    BandPass as _BandPass,
+    Cuboid as _Cuboid,
+    Disc as _Disc,
+    FamilyFilter as _FamilyFilter,
+    HighPass as _HighPass,
+    LowPass as _LowPass,
+    SolarNeighborhood as _SolarNeighborhood,
+    Sphere as _Sphere,
+)
 from pynbody.snapshot import SimSnap
 from pynbody.units import UnitBase
 
 from pynbodyext.core.calculate import FilterBase, Param
-
-from .pynfilt import (
-    _Annulus,
-    _BandPass,
-    _Cuboid,
-    _Disc,
-    _FamilyFilter,
-    _HighPass,
-    _LowPass,
-    _SolarNeighborhood,
-    _Sphere,
-)
 
 __all__ = [
     "Sphere",
