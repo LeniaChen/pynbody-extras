@@ -16,8 +16,14 @@ from typing import Any, ClassVar, overload
 
 import numpy as np
 
-ArrayLike = Any
-BinAlgorithm = Callable[[np.ndarray, int, float, float], ArrayLike]
+# The edge algorithms live in their own module; re-exported because
+# ``bins.axes`` is the import path the bin nodes and ``bins`` use.
+from ._axis_edges import (
+    BIN_ALGORITHMS as BIN_ALGORITHMS,
+    _as_1d_array,
+    register_bin_algorithm as register_bin_algorithm,
+)
+
 AxisPropertyFunc = Callable[["BinAxis"], Any]
 BinDerivedCondition = Callable[[Any], bool]
 BinDerivedFunc = Callable[[Any], Any]
@@ -37,95 +43,6 @@ class BinDerivedSpec:
     def is_available(self, bins: Any) -> bool:
         return True if self.condition is None else bool(self.condition(bins))
 
-
-def _as_1d_array(value: Any, *, name: str) -> np.ndarray:
-    arr = np.asarray(value)
-    if arr.ndim != 1:
-        raise ValueError(f"{name} must be one-dimensional.")
-    return arr
-
-
-def _linear_edges(values: np.ndarray, nbins: int, vmin: float, vmax: float) -> np.ndarray:
-    return np.linspace(vmin, vmax, nbins + 1)
-
-
-def _log_edges(values: np.ndarray, nbins: int, vmin: float, vmax: float) -> np.ndarray:
-    if vmin <= 0 or vmax <= 0:
-        raise ValueError("log bin mode requires positive vmin and vmax.")
-    return np.logspace(np.log10(vmin), np.log10(vmax), nbins + 1)
-
-
-def _equaln_edges(values: np.ndarray, nbins: int, vmin: float, vmax: float) -> np.ndarray:
-    finite = np.asarray(values)[np.isfinite(values)]
-    finite = finite[(finite >= vmin) & (finite <= vmax)]
-    if finite.size == 0:
-        raise ValueError("equaln bin mode requires at least one finite value in range.")
-    quantiles = np.linspace(0.0, 1.0, nbins + 1)
-    edges = np.quantile(finite, quantiles)
-    edges[0] = vmin
-    edges[-1] = vmax
-    return edges
-
-
-BIN_ALGORITHMS: dict[str, BinAlgorithm] = {
-    "linear": _linear_edges,
-    "lin": _linear_edges,
-    "log": _log_edges,
-    "equaln": _equaln_edges,
-    "quantile": _equaln_edges,
-}
-
-
-@overload
-def register_bin_algorithm(
-    name: str, func: None = None, *, overwrite: bool = False
-) -> Callable[[BinAlgorithm], BinAlgorithm]: ...
-
-
-@overload
-def register_bin_algorithm(name: str, func: BinAlgorithm, *, overwrite: bool = False) -> BinAlgorithm: ...
-
-
-def register_bin_algorithm(
-    name: str, func: BinAlgorithm | None = None, *, overwrite: bool = False
-) -> BinAlgorithm | Callable[[BinAlgorithm], BinAlgorithm]:
-    """Register a custom bin-edge algorithm.
-
-    The algorithm must be ``f(values, nbins, vmin, vmax) -> ndarray`` returning
-    ``nbins + 1`` strictly increasing edges.  Works as a decorator or as a direct
-    call.
-
-    Parameters
-    ----------
-    name : str
-        Key used by ``Bin1D(mode=...)``.
-    func : callable, optional
-        The algorithm.  Omit to use as a decorator.
-    overwrite : bool, default: False
-        Whether to replace an existing algorithm with the same name.
-
-    Returns
-    -------
-    callable
-        The algorithm (when called directly) or a decorator.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> @register_bin_algorithm("centroid_edges", overwrite=True)
-    ... def centroid_edges(values, nbins, vmin, vmax):
-    ...     return np.linspace(vmin, vmax, nbins + 1)
-    """
-
-    def decorator(algorithm: BinAlgorithm) -> BinAlgorithm:
-        if not overwrite and name in BIN_ALGORITHMS:
-            raise KeyError(f"Bin algorithm {name!r} is already registered.")
-        BIN_ALGORITHMS[name] = algorithm
-        return algorithm
-
-    if func is None:
-        return decorator
-    return decorator(func)
 
 
 # --- Axis physical measure registry ---
