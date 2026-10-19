@@ -9,7 +9,7 @@ described in :mod:`pynbodyext.core.calculate.interfaces`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, cast, dataclass_transform, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 from pynbodyext.core.calculate.params.fields import (
     Param,
@@ -21,6 +21,7 @@ from pynbodyext.core.calculate.params.fields import (
     declared_annotation,
     declared_param_field,
 )
+from pynbodyext.util._type import dataclass_transform
 
 from .base import CalculatorBase
 

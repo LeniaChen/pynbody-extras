@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeVar, TypeVarTuple, Unpack, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, overload
 
 import numpy as np
 from pynbody import units
@@ -50,6 +50,7 @@ from pynbodyext.core.calculate.result.enums import (
     ErrorPolicy,
     RecordPolicy,
 )
+from pynbodyext.util._type import Self, TypeVarTuple, Unpack
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

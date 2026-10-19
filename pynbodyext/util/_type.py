@@ -1,6 +1,7 @@
 """Some type utilities for pynbodyext"""
 
 import importlib
+import sys
 from collections.abc import Callable
 from typing import Any, Protocol, TypeAlias, TypeVar, runtime_checkable
 
@@ -13,14 +14,12 @@ from pynbody.snapshot import SimSnap
 from pynbody.transformation import Transformation
 from pynbody.units import UnitBase
 
-try:
-    from typing import Self, TypeVarTuple, Unpack  # python >= 3.11
-except ImportError:
-    from typing import Self
+if sys.version_info >= (3, 11):
+    from typing import Self, TypeVarTuple, Unpack, dataclass_transform
+else:
+    from typing_extensions import Self, TypeVarTuple, Unpack, dataclass_transform
 
-    from typing_extensions import TypeVarTuple, Unpack  # type: ignore
-
-__all__ = ["Self", "TypeVarTuple", "Unpack"]
+__all__ = ["Self", "TypeVarTuple", "Unpack", "dataclass_transform"]
 
 
 __all__ += [
