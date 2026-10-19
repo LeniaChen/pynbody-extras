@@ -107,6 +107,7 @@ from pynbody.snapshot import SimSnap
 from pynbody.transformation import Transformation
 
 from pynbodyext.core.calculate.display import display_value
+from pynbodyext.core.calculate.interfaces import register_node_factory
 from pynbodyext.core.calculate.params.fields import Param
 from pynbodyext.core.calculate.result.enums import (
     BuiltinKinds,
@@ -458,3 +459,8 @@ def chain_transforms(*transforms: TransformBase[Any]) -> TransformBase[Any]:
     if not transforms:
         raise ValueError("At least one transform must be provided.")
     return TransformChain(*transforms)
+
+
+# ``runtime.scopes`` builds a chain without importing this layer; see
+# ``pynbodyext.core.calculate.interfaces``.
+register_node_factory("chain_transforms", chain_transforms)

@@ -1,13 +1,17 @@
-"""Dataclass-like calculator declaration helpers."""
+"""Dataclass-like calculator declaration helpers.
+
+This is *node authoring* — it decorates a ``CalculatorBase`` subclass and installs
+the parameter machinery — so it lives with the nodes rather than with
+``params.fields``, which it uses.  Import direction is part of the layering rule
+described in :mod:`pynbodyext.core.calculate.interfaces`.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, cast, dataclass_transform, overload
 
-from pynbodyext.core.calculate.nodes.base import CalculatorBase
-
-from .fields import (
+from pynbodyext.core.calculate.params.fields import (
     Param,
     capture_init_values,
     collect_base_init_fields,
@@ -17,6 +21,8 @@ from .fields import (
     declared_annotation,
     declared_param_field,
 )
+
+from .base import CalculatorBase
 
 if TYPE_CHECKING:
     from collections.abc import Callable

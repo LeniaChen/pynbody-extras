@@ -59,14 +59,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from inspect import Parameter, signature as inspect_signature
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 import numpy as np
 from pynbody import units
 from pynbody.array import SimArray
 
-from pynbodyext.core.calculate.runtime.context import ExecutionContext
-from pynbodyext.core.calculate.runtime.input import NodeInput
+from pynbodyext.core.calculate.interfaces import CalculatorNode
 from pynbodyext.util._type import get_signature_safe
 
 if TYPE_CHECKING:
@@ -101,11 +100,9 @@ class DynamicParamSpec:
 
 def dynamic_value_signature(value: Any) -> Any:
     """Return a stable signature fragment for a dynamic parameter value."""
-    from pynbodyext.core.calculate.nodes.base import CalculatorBase
-
     signature: Any
 
-    if isinstance(value, CalculatorBase):
+    if isinstance(value, CalculatorNode):
         signature = value.signature()
     elif isinstance(value, (str, bool, int, float, np.integer, np.floating)):
         signature = value.item() if isinstance(value, np.generic) else value
@@ -131,10 +128,8 @@ def dynamic_value_signature(value: Any) -> Any:
 
 def dynamic_value_dependencies(value: Any) -> list[CalculatorBase[Any, Any]]:
     """Return calculator dependencies nested inside a dynamic value."""
-    from pynbodyext.core.calculate.nodes.base import CalculatorBase
-
-    if isinstance(value, CalculatorBase):
-        return [value]
+    if isinstance(value, CalculatorNode):
+        return [cast("CalculatorBase[Any, Any]", value)]
     if isinstance(value, Mapping):
         deps: list[CalculatorBase[Any, Any]] = []
         for item in value.values():
@@ -261,12 +256,10 @@ def resolve_value_for(
     allow_callable: bool = True,
     coerce_unit_string: bool = False,
 ) -> Any:
-    from pynbodyext.core.calculate.nodes.base import CalculatorBase
-
-    if isinstance(value, CalculatorBase):
+    if isinstance(value, CalculatorNode):
         if resolver.active_sim is None and not allow_calculator:
             return value
-        value = resolver.calculator_value(value)
+        value = resolver.calculator_value(cast("CalculatorBase[Any, Any]", value))
     elif callable(value):
         if resolver.active_sim is None and not allow_callable:
             return value

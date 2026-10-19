@@ -15,6 +15,7 @@ Mixins call each other only through instance attributes, resolved by the MRO of
 from __future__ import annotations
 
 import copy
+import dataclasses
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeVar, TypeVarTuple, Unpack, cast, overload
 
@@ -57,8 +58,7 @@ if TYPE_CHECKING:
     from pynbodyext.core.calculate.result.signature import CalculatorSignature
     from pynbodyext.core.calculate.runtime.context import ExecutionContext
     from pynbodyext.core.calculate.runtime.input import NodeInput
-    from pynbodyext.core.calculate.runtime.options import RunOptions
-    from pynbodyext.core.calculate.runtime.progress import ProgressSink, ProgressVerbosity
+    from pynbodyext.core.calculate.runtime.options import RunOptionKwargs, RunOptions
     from pynbodyext.core.calculate.runtime.scopes import ScopeSpec
     from pynbodyext.core.calculate.runtime.sim_identity import SimIdentityProvider
     from pynbodyext.core.calculate.store.base import ResultStore
@@ -91,6 +91,22 @@ def _merge_dependencies(*groups: list[CalculatorBase[Any, Any]]) -> list[Calcula
             seen.add(key)
             merged.append(dep)
     return merged
+
+
+def _refuse_unknown_options(names: Mapping[str, Any], options: RunOptions) -> None:
+    """Refuse an override that is not a field of *options*, naming it.
+
+    ``**overrides`` would otherwise accept a typo and either ignore it or fail
+    deep inside the dataclass; every entry point that takes run options by keyword
+    (``run``, ``__call__``, ``batch``, ``options``) reports the same way.
+    """
+    option_names = {field.name for field in dataclasses.fields(options)}
+    unknown = sorted(set(names) - option_names)
+    if unknown:
+        raise TypeError(
+            f"unknown run option(s): {', '.join(unknown)}. "
+            f"Valid options are: {', '.join(sorted(option_names))}."
+        )
 
 
 class _CalculatorContract:
@@ -435,19 +451,9 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         sim: Any,
         options: RunOptions | None = None,
         *,
-        cache: bool | None = None,
-        progress: bool | ProgressVerbosity | ProgressSink | list[ProgressSink] | tuple[ProgressSink, ...] | None = None,
-        perf_time: bool | None = None,
-        perf_memory: bool | None = None,
-        observe: bool | None = None,
-        backend: str | None = None,
-        default_record_policy: RecordPolicy | None = None,
-        errors: ErrorPolicy | str | None = None,
-        cache_small_value_bytes: int | None = None,
-        auto_record_cached_values: bool | None = None,
-        auto_record_small_value_bytes: int | None = None,
-        sim_identity: SimIdentityProvider | None = None,
         store: ResultStore | None = None,
+        sim_identity: SimIdentityProvider | None = None,
+        **overrides: Unpack[RunOptionKwargs],
     ) -> TPublic:
         """Evaluate the calculator and return a public value.
 
@@ -460,99 +466,42 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
             pynbody snapshot or compatible simulation object.
         options : RunOptions, optional
             Base execution options to merge with keyword overrides.
-        cache: bool, optional
-            Whether to cache results of this run.
-        progress: bool | ProgressVerbosity | ProgressSink | list[ProgressSink] | tuple[ProgressSink, ...] | None, optional
-            Whether and how to report progress for this run. e.g. ``True`` or ``"node"`` to log each node,
-            ``"run"``, ``"phase"``, or ``"debug"`` for coarser logs;
-            add "bar:" prefix for progress bars (e.g., ``"bar:node"``); or pass custom ProgressSink instances.
-        perf_time: bool, optional
-            Whether to measure and report execution time for this run.
-        perf_memory: bool, optional
-            Whether to measure and report memory usage for this run.
-        observe: bool, optional
-            Whether to observe read, dirty, and delete operations for this simulation.
-        backend: str, optional
-            Backend to use for this run.
-        default_record_policy: RecordPolicy, optional
-            Default record policy for this run.
-        errors: ErrorPolicy | str, optional
-            Error policy for this run.
-        cache_small_value_bytes: int, optional
-            Cache small value bytes for this run.
-        auto_record_cached_values: bool, optional
-            Whether cached SUMMARY nodes may retain their public value.
-        auto_record_small_value_bytes: int, optional
-            Maximum public-value size eligible for automatic SUMMARY recording.
+        store : ResultStore, optional
+            Persistence hook (see :meth:`run`).
         sim_identity : SimIdentityProvider, optional
             Identity provider for a restart-stable simulation address (see
             :meth:`run`).
-        store : ResultStore, optional
-            Persistence hook (see :meth:`run`).
+        **overrides
+            Any :class:`RunOptions` field, by name — ``cache``, ``progress``,
+            ``perf_time``, ``perf_memory``, ``observe``, ``backend``,
+            ``default_record_policy``, ``errors``, ``cache_small_value_bytes``,
+            ``auto_record_cached_values``, ``auto_record_small_value_bytes``.  Each
+            option is documented on :class:`RunOptions`.
 
         Returns
         -------
         TPublic
             Public value returned by this calculator after execution and materialization.
         """
-        return self.run(
-            sim,
-            options=options,
-            cache=cache,
-            progress=progress,
-            perf_time=perf_time,
-            perf_memory=perf_memory,
-            observe=observe,
-            backend=backend,
-            default_record_policy=default_record_policy,
-            errors=errors,
-            cache_small_value_bytes=cache_small_value_bytes,
-            auto_record_cached_values=auto_record_cached_values,
-            auto_record_small_value_bytes=auto_record_small_value_bytes,
-            sim_identity=sim_identity,
-            store=store,
-        ).value
+        return self.run(sim, options=options, store=store, sim_identity=sim_identity, **overrides).value
 
     def _resolve_run_options(
         self,
         options: RunOptions | None = None,
-        *,
-        cache: bool | None = None,
-        progress: bool | ProgressVerbosity | ProgressSink | list[ProgressSink] | tuple[ProgressSink, ...] | None = None,
-        perf_time: bool | None = None,
-        perf_memory: bool | None = None,
-        observe: bool | None = None,
-        backend: str | None = None,
-        default_record_policy: RecordPolicy | None = None,
-        errors: ErrorPolicy | str | None = None,
-        cache_small_value_bytes: int | None = None,
-        auto_record_cached_values: bool | None = None,
-        auto_record_small_value_bytes: int | None = None,
+        **overrides: Unpack[RunOptionKwargs],
     ) -> RunOptions:
-        merged = copy.copy(options) if options is not None else copy.copy(self.default_options)
+        """Lay keyword *overrides* onto *options* (or this node's own options).
 
-        if cache is not None:
-            merged.cache = cache
-        if progress is not None:
-            merged.progress = progress
-        if perf_time is not None:
-            merged.perf_time = perf_time
-        if perf_memory is not None:
-            merged.perf_memory = perf_memory
-        if observe is not None:
-            merged.observe = observe
-        if backend is not None:
-            merged.backend = backend
-        if default_record_policy is not None:
-            merged.default_record_policy = default_record_policy
-        if errors is not None:
-            merged.errors = errors
-        if cache_small_value_bytes is not None:
-            merged.cache_small_value_bytes = cache_small_value_bytes
-        if auto_record_cached_values is not None:
-            merged.auto_record_cached_values = auto_record_cached_values
-        if auto_record_small_value_bytes is not None:
-            merged.auto_record_small_value_bytes = auto_record_small_value_bytes
+        An override passed as ``None`` keeps the value the base options already
+        had, so a call site can forward a partially-filled argument without
+        erasing the defaults.  An unknown name is refused by name rather than
+        silently ignored, since ``**overrides`` would otherwise swallow a typo.
+        """
+        merged = copy.copy(options) if options is not None else copy.copy(self.default_options)
+        _refuse_unknown_options(overrides, merged)
+        for name, value in overrides.items():
+            if value is not None:
+                setattr(merged, name, value)
         merged.errors = ErrorPolicy(merged.errors)
 
         return merged
@@ -562,19 +511,9 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         sim: Any,
         options: RunOptions | None = None,
         *,
-        cache: bool | None = None,
-        progress: bool | ProgressVerbosity | ProgressSink | list[ProgressSink] | tuple[ProgressSink, ...] | None = None,
-        perf_time: bool | None = None,
-        perf_memory: bool | None = None,
-        observe: bool | None = None,
-        backend: str | None = None,
-        default_record_policy: RecordPolicy | None = None,
-        errors: ErrorPolicy | str | None = None,
-        cache_small_value_bytes: int | None = None,
-        auto_record_cached_values: bool | None = None,
-        auto_record_small_value_bytes: int | None = None,
         sim_identity: SimIdentityProvider | None = None,
         store: ResultStore | None = None,
+        **overrides: Unpack[RunOptionKwargs],
     ) -> Result[TPublic]:
         """Run the calculator and return a Result.
 
@@ -584,30 +523,6 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
             pynbody snapshot or compatible simulation object.
         options : RunOptions, optional
             Base execution options to merge with keyword overrides.
-        cache: bool, optional
-            Whether to cache results of this run.
-        progress: bool | ProgressVerbosity | ProgressSink | list[ProgressSink] | tuple[ProgressSink, ...] | None, optional
-            Whether and how to report progress for this run. e.g. ``True`` or ``"node"`` to log each node,
-            ``"run"``, ``"phase"``, or ``"debug"`` for coarser logs;
-            add "bar:" prefix for progress bars (e.g., ``"bar:node"``); or pass custom ProgressSink instances.
-        perf_time: bool, optional
-            Whether to measure and report execution time for this run.
-        perf_memory: bool, optional
-            Whether to measure and report memory usage for this run.
-        observe: bool, optional
-            Whether to observe read, dirty, and delete operations for this simulation.
-        backend: str, optional
-            Backend to use for this run.
-        default_record_policy: RecordPolicy, optional
-            Default record policy for this run.
-        errors: ErrorPolicy | str, optional
-            Error policy for this run.
-        cache_small_value_bytes: int, optional
-            Cache small value bytes for this run.
-        auto_record_cached_values: bool, optional
-            Whether cached SUMMARY nodes may retain their public value.
-        auto_record_small_value_bytes: int, optional
-            Maximum public-value size eligible for automatic SUMMARY recording.
         sim_identity : SimIdentityProvider, optional
             Identity provider mapping the simulation object to a stable address
             tuple (``("sim", "snapshot_103", "halo_0")``).  When given, the engine
@@ -617,6 +532,10 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
             When given, the assembled result is persisted on completion keyed by
             ``(sim_identity(sim), root CalculatorSignature)``.  Only written on a
             clean run (see :meth:`EvalEngine.run`).
+        **overrides
+            Any :class:`RunOptions` field, by name; each option is documented on
+            :class:`RunOptions`.  A name passed as ``None`` keeps the value the
+            base options already had.
 
         Returns
         -------
@@ -626,23 +545,10 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         from pynbodyext.core.calculate.runtime.engine import EvalEngine
 
         engine = EvalEngine(sim_identity=sim_identity) if sim_identity is not None else EvalEngine()
-        merged = self._resolve_run_options(
-            options=options,
-            cache=cache,
-            progress=progress,
-            perf_time=perf_time,
-            perf_memory=perf_memory,
-            observe=observe,
-            backend=backend,
-            default_record_policy=default_record_policy,
-            errors=errors,
-            cache_small_value_bytes=cache_small_value_bytes,
-            auto_record_cached_values=auto_record_cached_values,
-            auto_record_small_value_bytes=auto_record_small_value_bytes,
-        )
+        merged = self._resolve_run_options(options=options, **overrides)
         return engine.run(cast("CalculatorBase[Any, TPublic]", self), sim, merged, store=store)
 
-    def value(self, sim: Any, options: RunOptions | None = None, **overrides: Any) -> TPublic:
+    def value(self, sim: Any, options: RunOptions | None = None, **overrides: Unpack[RunOptionKwargs]) -> TPublic:
         """Evaluate the calculator and return only the public value.
 
         Parameters
@@ -663,7 +569,7 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         return self.run(sim, options=options, **overrides).value
 
     @contextmanager
-    def batch(self, options: RunOptions | None = None, **overrides: Any) -> Any:  # yields _BatchCaller[TPublic]
+    def batch(self, options: RunOptions | None = None, **overrides: Unpack[RunOptionKwargs]) -> Any:  # yields _BatchCaller[TPublic]
         """Context manager for efficient repeated execution on many sims.
 
         Pre-computes the node signature once and creates a single
@@ -817,13 +723,14 @@ class _CalculatorComposeMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         """
         return self._clone(name=name, record_policy=policy)
 
-    def _with_options(self: Self, **changes: Any) -> Self:
+    def _with_options(self: Self, **changes: Unpack[RunOptionKwargs]) -> Self:
         opts = copy.copy(self.default_options)
+        _refuse_unknown_options(changes, opts)
         for key, value in changes.items():
             setattr(opts, key, value)
         return self._clone(default_options=opts)
 
-    def options(self: Self, **changes: Any) -> Self:
+    def options(self: Self, **changes: Unpack[RunOptionKwargs]) -> Self:
         """Return a copy with run options overridden.
 
         Accepts any ``RunOptions`` field as a keyword argument; unchanged fields
@@ -832,23 +739,8 @@ class _CalculatorComposeMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         Parameters
         ----------
         **changes :
-            Keyword arguments matching :class:`~pynbodyext.core.calculate.runtime.options.RunOptions`
-            fields.  Recognised keys:
-
-            - ``cache`` (bool): enable the per-run runtime cache.
-            - ``progress`` (bool | str | ProgressSink | list/tuple[ProgressSink] | None):
-              progress reporting configuration (``"run"``, ``"node"``, ``"phase"``,
-              ``"debug"``, ``"bar"``, ``"bar:<verbosity>"``, or ``"bar-only"``).
-            - ``perf_time`` / ``perf_memory`` (bool): time / memory collection.
-            - ``observe`` (bool): diagnostic field-access observation.
-            - ``backend`` (str): future execution-backend label.
-            - ``default_record_policy`` (:class:`RecordPolicy`): policy for nodes
-              without an explicit policy.
-            - ``errors`` (:class:`ErrorPolicy` | str): error handling policy.
-            - ``cache_small_value_bytes`` (int): max public-value size to cache.
-            - ``auto_record_cached_values`` (bool): retain cached SUMMARY values.
-            - ``auto_record_small_value_bytes`` (int | None): max value size to
-              auto-record, or ``None`` to disable.
+            Any :class:`~pynbodyext.core.calculate.runtime.options.RunOptions` field,
+            by name; each is documented on :class:`RunOptions`.
 
         Returns
         -------

@@ -5,7 +5,12 @@ from __future__ import annotations
 from functools import lru_cache
 from html import escape
 from importlib import resources
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+T = TypeVar("T")
 
 
 @lru_cache(maxsize=1)
@@ -474,6 +479,103 @@ def format_mem(value: int | None) -> str:
     return f"{value / 1024**3:.2f} GiB"
 
 
+# ---------------------------------------------------------------------------
+# Tree text
+# ---------------------------------------------------------------------------
+
+
+def validate_tree_limits(max_depth: int | None, max_children: int | None) -> None:
+    """Refuse a negative truncation limit, for every tree renderer."""
+    if max_depth is not None and max_depth < 0:
+        raise ValueError("max_depth must be non-negative or None")
+    if max_children is not None and max_children < 0:
+        raise ValueError("max_children must be non-negative or None")
+
+
+def subtree_nodes(
+    roots: Sequence[T],
+    children: Callable[[T], Sequence[T]],
+    *,
+    key: Callable[[T], Any],
+) -> list[T]:
+    """Return the nodes of the subtrees rooted at *roots*, each node once.
+
+    *key* identifies a node, so a graph that shares one node between two parents
+    counts it once — which is what the hidden-count summaries report.
+    """
+    out: list[T] = []
+    seen: set[Any] = set()
+    stack = list(reversed(list(roots)))
+    while stack:
+        node = stack.pop()
+        node_key = key(node)
+        if node_key in seen:
+            continue
+        seen.add(node_key)
+        out.append(node)
+        stack.extend(reversed(list(children(node))))
+    return out
+
+
+def hidden_summary(
+    nodes: list[T],
+    *,
+    key: Callable[[T], Any],
+    children: Callable[[T], Sequence[T]],
+) -> str:
+    """Describe the *nodes* a truncated tree leaves out, by subtree size."""
+    count = len(subtree_nodes(nodes, children, key=key))
+    suffix = "node" if count == 1 else "nodes"
+    return f"... {count} {suffix} hidden"
+
+
+def tree_lines(
+    root: T,
+    *,
+    children: Callable[[T], Sequence[T]],
+    label: Callable[[T], str],
+    hidden: Callable[[list[T]], str],
+    max_depth: int | None = None,
+    max_children: int | None = None,
+) -> list[str]:
+    """Render *root* and its descendants as box-drawing tree lines.
+
+    One implementation of the tree convention — the ``├─`` / ``└─`` branches, the
+    ``│  `` guide under a non-last child, and the truncation policy — so the
+    calculator dependency tree and the two result trees cannot drift apart.
+
+    *label* renders one node's line and *hidden* describes the nodes a
+    ``max_depth`` / ``max_children`` cut leaves out. The root carries no branch.
+    """
+    validate_tree_limits(max_depth, max_children)
+    lines: list[str] = [label(root)]
+
+    def walk(node: T, prefix: str, depth: int) -> None:
+        node_children = list(children(node))
+        if not node_children:
+            return
+        if max_depth is not None and depth >= max_depth:
+            lines.append(f"{prefix}└─ {hidden(node_children)}")
+            return
+
+        visible = node_children if max_children is None else node_children[:max_children]
+        omitted = [] if max_children is None else node_children[max_children:]
+        for index, child in enumerate(visible):
+            is_last = index == len(visible) - 1 and not omitted
+            branch = "└─" if is_last else "├─"
+            lines.append(f"{prefix}{branch} {label(child)}")
+            walk(child, prefix + ("   " if is_last else "│  "), depth + 1)
+        if omitted:
+            lines.append(f"{prefix}└─ {hidden(omitted)}")
+
+    root_children = list(children(root))
+    if max_depth == 0 and root_children:
+        lines.append(f"└─ {hidden(root_children)}")
+    else:
+        walk(root, "", 1)
+    return lines
+
+
 __all__ = [
     "HTML_STYLE",
     "REPR_STYLES",
@@ -499,4 +601,8 @@ __all__ = [
     "TextReport",
     "format_time",
     "format_mem",
+    "validate_tree_limits",
+    "subtree_nodes",
+    "hidden_summary",
+    "tree_lines",
 ]

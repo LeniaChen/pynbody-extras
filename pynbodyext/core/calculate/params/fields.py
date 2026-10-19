@@ -470,7 +470,7 @@ def collect_base_init_fields(cls: type[Any]) -> dict[str, _ParamField]:
 
     A role base such as ``TransformBase`` is not itself a dataclass, so a
     ``Param``-declared attribute it defines never reaches the ``__init__`` that
-    :func:`~pynbodyext.core.calculate.params.declarative.dataclass_calc` generates
+    :func:`~pynbodyext.core.calculate.nodes.declarative.dataclass_calc` generates
     for a subclass — without help, every subclass has to repeat the declaration
     just to get the parameter (and its type hint).  ``dataclass_calc`` calls this
     to append those declarations as real fields, so a role parameter is written

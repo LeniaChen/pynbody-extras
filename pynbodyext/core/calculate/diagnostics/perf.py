@@ -78,7 +78,7 @@ import time
 import tracemalloc
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 try:
     import psutil
@@ -88,12 +88,62 @@ except Exception:
     psutil = None
     _HAS_PSUTIL = False
 
-from pynbodyext.core.calculate.display import format_mem, format_time
-from pynbodyext.core.calculate.result.result import PerfSummary, PhaseRecord, ResultNode
+from pynbodyext.core.calculate.display import InfoView, format_mem, format_time
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
+
+    from pynbodyext.core.calculate.result.result import ResultNode
+
+
+@dataclass(slots=True, repr=False)
+class PhaseRecord(InfoView):
+    """Timing and memory information for one node phase."""
+
+    phase: str
+    started_at: float
+    finished_at: float | None = None
+    elapsed_s: float | None = None
+    memory_used: int | None = None
+    memory_peak: int | None = None
+    rss_used: int | None = None
+    status: str = "ok"
+
+    def _display_rows(self) -> list[tuple[str, Any]]:
+        return [
+            ("phase", self.phase),
+            ("elapsed", format_time(self.elapsed_s)),
+            ("memory", format_mem(self.memory_used)),
+            ("peak", format_mem(self.memory_peak)),
+            ("rss", format_mem(self.rss_used)),
+            ("status", self.status),
+        ]
+
+
+@dataclass(slots=True, repr=False)
+class PerfSummary(InfoView):
+    """Aggregate performance counters for a calculator run."""
+
+    total_time_s: float | None = None
+    node_count: int = 0
+    phase_count: int = 0
+    cache_hit_count: int = 0
+    cache_miss_count: int = 0
+    cache_store_count: int = 0
+
+    def _display_title(self) -> str:
+        return "Performance"
+
+    def _display_rows(self) -> list[tuple[str, Any]]:
+        return [
+            ("time", format_time(self.total_time_s)),
+            ("nodes", self.node_count),
+            ("phases", self.phase_count),
+            ("cache hits", self.cache_hit_count),
+            ("cache misses", self.cache_miss_count),
+            ("cache stores", self.cache_store_count),
+        ]
 
 
 def _get_rss() -> int | None:

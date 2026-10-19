@@ -1,5 +1,6 @@
 """Calculator node authoring primitives and role-specific node classes."""
 
+from . import serde as _serde  # noqa: F401  (installs the signature hooks at import)
 from .base import CalculatorBase, CombinedCalculator
 from .expr import ConstantProperty, LambdaProperty, OpProperty
 from .filters import AndFilter, FilterBase, NotFilter, OrFilter

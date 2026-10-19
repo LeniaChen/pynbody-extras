@@ -93,6 +93,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pynbodyext.core.calculate.interfaces import register_node_factory
 from pynbodyext.core.calculate.result.enums import BuiltinKinds, ErrorPolicy
 
 from .base import CalculatorBase
@@ -170,3 +171,8 @@ class Pipeline(CalculatorBase[dict[str, Any], dict[str, Any]]):
                     raise ValueError(f"Duplicate named pipeline output {key!r}.")
                 ctx.nodes.named[key] = node_result.node_id
         return values
+
+
+# ``runtime.scopes`` builds a pipeline without importing this layer; see
+# ``pynbodyext.core.calculate.interfaces``.
+register_node_factory("pipeline", Pipeline)

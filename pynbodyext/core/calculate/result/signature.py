@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import importlib
 import io
 import json
 from dataclasses import MISSING, Field, dataclass, field, fields as dataclass_fields, is_dataclass
@@ -43,7 +42,13 @@ from pynbody import units
 from pynbody.array import SimArray
 from pynbody.family import Family, get_family
 
+from pynbodyext.core.calculate.interfaces import (
+    decode_calculator_payload,
+    encode_calculator_payload,
+    is_calculator_node,
+)
 from pynbodyext.core.calculate.params.fields import captured_init_value, collect_param_specs
+from pynbodyext.util._type import class_path, import_object
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -196,21 +201,6 @@ class _Encoded:
 # ---------------------------------------------------------------------------
 
 
-def _class_path(obj: Any) -> str:
-    cls = obj if isinstance(obj, type) else type(obj)
-    return f"{cls.__module__}.{cls.__qualname__}"
-
-
-def _import_object(path: str) -> Any:
-    module_name, _, qualname = path.rpartition(".")
-    if not module_name or not qualname:
-        raise ValueError(f"invalid object path: {path!r}")
-    obj: Any = importlib.import_module(module_name)
-    for part in qualname.split("."):
-        obj = getattr(obj, part)
-    return obj
-
-
 def _merge_encoded(value: Any, children: list[_Encoded]) -> _Encoded:
     paths: list[str] = []
     constructible = True
@@ -222,7 +212,7 @@ def _merge_encoded(value: Any, children: list[_Encoded]) -> _Encoded:
 
 
 def _non_constructible(value: Any, path: str, reason: str, **metadata: Any) -> _Encoded:
-    payload = {"type": "unsupported", "class": _class_path(value), "repr": repr(value), "reason": reason}
+    payload = {"type": "unsupported", "class": class_path(value), "repr": repr(value), "reason": reason}
     payload.update(metadata)
     return _Encoded(payload, constructible=False, paths=(path,))
 
@@ -287,66 +277,13 @@ def _field_default(item: Field[Any]) -> tuple[bool, Any]:
 
 
 class _Encoder:
-    """Encodes Python calculator graphs into JSON-compatible signature payloads.
+    """Encodes Python *values* of a calculator graph into JSON-compatible payloads.
 
-    All methods are static.  Entry points used by ``calculator_to_signature``::
-
-        _Encoder.encode_special(calculator, path, inline_bytes)
-        _Encoder.encode_dataclass(calculator, path, inline_bytes)
-        _Encoder.encode_generic(calculator, path, inline_bytes)
+    All methods are static.  Calculator payloads themselves — which node kinds exist
+    and how each is written — live in the layer that owns the classes,
+    :mod:`pynbodyext.core.calculate.nodes.serde`, and reach this module through
+    :func:`pynbodyext.core.calculate.interfaces.encode_calculator_payload`.
     """
-
-    # ------------------------------------------------------------------
-    # Transform / scope helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def is_transform_base(value: Any) -> bool:
-        try:
-            from pynbodyext.core.calculate.nodes.transforms import TransformBase
-        except Exception:
-            return False
-        return isinstance(value, TransformBase)
-
-    @staticmethod
-    def transform_state(calculator: Any, inline_bytes: int, path: str) -> tuple[dict[str, Any] | None, list[_Encoded]]:
-        if not _Encoder.is_transform_base(calculator):
-            return None, []
-        from .enums import RevertPolicy
-
-        state: dict[str, Any] = {}
-        children: list[_Encoded] = []
-        if calculator.revert_policy != RevertPolicy.ALWAYS:
-            rp = _Encoder.encode_value(calculator.revert_policy, f"{path}.revert_policy", inline_bytes)
-            state["revert_policy"] = rp.value
-            children.append(rp)
-        if calculator.measure_filter is not None:
-            mf = _Encoder.encode_value(calculator.measure_filter, f"{path}.measure_filter", inline_bytes)
-            state["measure_filter"] = mf.value
-            children.append(mf)
-        if not state:
-            return None, []
-        return state, children
-
-    @staticmethod
-    def encode_scope(scope: Any, path: str, inline_bytes: int) -> _Encoded:
-        from .enums import RevertPolicy
-
-        transforms = [
-            _Encoder.encode_calculator_value(t, f"{path}.transforms[{idx}]", inline_bytes)
-            for idx, t in enumerate(scope.transforms)
-        ]
-        children: list[_Encoded] = [*transforms]
-        payload: dict[str, Any] = {}
-        if transforms:
-            payload["transforms"] = [item.value for item in transforms]
-        if scope.filter is not None:
-            fe = _Encoder.encode_calculator_value(scope.filter, f"{path}.filter", inline_bytes)
-            payload["filter"] = fe.value
-            children.append(fe)
-        if scope.revert_policy != RevertPolicy.ALWAYS:
-            payload["revert_policy"] = scope.revert_policy.value
-        return _merge_encoded(payload, children)
 
     # ------------------------------------------------------------------
     # Value encoding
@@ -357,7 +294,7 @@ class _Encoder:
         array = np.asarray(value)
         base: dict[str, Any] = {
             "type": "array",
-            "class": _class_path(value),
+            "class": class_path(value),
             "dtype": str(array.dtype),
             "shape": list(array.shape),
             "nbytes": int(array.nbytes),
@@ -388,16 +325,14 @@ class _Encoder:
     @staticmethod
     def encode_value(value: Any, path: str, inline_bytes: int) -> _Encoded:  # noqa: PLR0911
         """Encode an arbitrary Python value into a JSON-compatible payload."""
-        from pynbodyext.core.calculate.nodes.base import CalculatorBase
-
-        if isinstance(value, CalculatorBase):
+        if is_calculator_node(value):
             return _Encoder.encode_calculator_value(value, path, inline_bytes)
         if value is None or isinstance(value, (bool, int, float, str)):
             return _Encoded(value)
         if isinstance(value, np.generic):
             return _Encoded({"type": "numpy_scalar", "dtype": str(value.dtype), "value": value.item()})
         if isinstance(value, Enum):
-            return _Encoded({"type": "enum", "class": _class_path(value), "value": value.value})
+            return _Encoded({"type": "enum", "class": class_path(value), "value": value.value})
         if isinstance(value, Family):
             return _Encoded({"type": "family", "name": value.name})
         if isinstance(value, units.UnitBase):
@@ -423,127 +358,6 @@ class _Encoder:
             return _non_constructible(value, path, "callables cannot be reconstructed from signature")
         return _non_constructible(value, path, "unsupported value type")
 
-    # ------------------------------------------------------------------
-    # Calculator encoding
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def encode_dataclass(calculator: Any, path: str, inline_bytes: int) -> _Encoded:
-        """Encode a dataclass-based calculator."""
-        ts, children = _Encoder.transform_state(calculator, inline_bytes, path)
-        init_entries = _encode_init_entries(calculator, path, inline_bytes)
-        init_payload: dict[str, Any] = {name: enc.value for name, enc in init_entries}
-        children.extend(enc for _, enc in init_entries)
-        payload: dict[str, Any] = {"node": "dataclass", "class": _class_path(calculator)}
-        if init_payload:
-            payload["init"] = init_payload
-        if ts is not None:
-            payload["transform"] = ts
-        return _merge_encoded(payload, children)
-
-    @staticmethod
-    def encode_special(calculator: Any, path: str, inline_bytes: int) -> _Encoded | None:
-        """Encode known special calculator types; returns None for unknown types."""
-        from pynbodyext.core.calculate.nodes.base import CombinedCalculator
-        from pynbodyext.core.calculate.nodes.expr import (
-            CalculatorValueProperty,
-            ConstantProperty,
-            LambdaProperty,
-            OpProperty,
-        )
-        from pynbodyext.core.calculate.nodes.filters import AndFilter, NotFilter, OrFilter
-        from pynbodyext.core.calculate.nodes.transforms import TransformChain
-
-        ts, ts_children = _Encoder.transform_state(calculator, inline_bytes, path)
-        encoded: _Encoded | None = None
-
-        if isinstance(calculator, CombinedCalculator):
-            items = [
-                _Encoder.encode_calculator_value(item, f"{path}.items[{i}]", inline_bytes)
-                for i, item in enumerate(calculator.items)
-            ]
-            encoded = _merge_encoded({"node": "combined", "items": [e.value for e in items]}, items)
-
-        elif isinstance(calculator, TransformChain):
-            transforms = [
-                _Encoder.encode_calculator_value(t, f"{path}.transforms[{i}]", inline_bytes)
-                for i, t in enumerate(calculator.transforms)
-            ]
-            payload: dict[str, Any] = {
-                "node": "transform_chain",
-                "class": _class_path(calculator),
-                "transforms": [e.value for e in transforms],
-            }
-            if ts is not None:
-                payload["transform"] = ts
-            encoded = _merge_encoded(payload, [*ts_children, *transforms])
-
-        elif isinstance(calculator, (AndFilter, OrFilter)):
-            op = "and" if isinstance(calculator, AndFilter) else "or"
-            left = _Encoder.encode_calculator_value(calculator.left, f"{path}.left", inline_bytes)
-            right = _Encoder.encode_calculator_value(calculator.right, f"{path}.right", inline_bytes)
-            left, right = _sort_encoded_commutative([left, right])
-            encoded = _merge_encoded(
-                {"node": "filter_op", "op": op, "left": left.value, "right": right.value}, [left, right]
-            )
-
-        elif isinstance(calculator, NotFilter):
-            child = _Encoder.encode_calculator_value(calculator.child, f"{path}.child", inline_bytes)
-            encoded = _merge_encoded({"node": "filter_op", "op": "not", "child": child.value}, [child])
-
-        elif isinstance(calculator, ConstantProperty):
-            v = _Encoder.encode_value(calculator._value, f"{path}.value", inline_bytes)
-            encoded = _merge_encoded({"node": "constant_property", "value": v.value}, [v])
-
-        elif isinstance(calculator, CalculatorValueProperty):
-            nested = _Encoder.encode_calculator_value(calculator.calculator, f"{path}.calculator", inline_bytes)
-            encoded = _merge_encoded({"node": "calculator_value_property", "calculator": nested.value}, [nested])
-
-        elif isinstance(calculator, OpProperty):
-            operands = [
-                _Encoder.encode_calculator_value(op, f"{path}.operands[{i}]", inline_bytes)
-                for i, op in enumerate(calculator.operands)
-            ]
-            if calculator.op_name in _COMMUTATIVE_PROPERTY_OPS:
-                operands = _sort_encoded_commutative(operands)
-            encoded = _merge_encoded(
-                {"node": "op_property", "op_name": calculator.op_name, "operands": [e.value for e in operands]},
-                operands,
-            )
-
-        elif isinstance(calculator, LambdaProperty):
-            payload = {"node": "lambda_property", "class": _class_path(calculator), "func_repr": repr(calculator._func)}
-            encoded = _Encoded(payload, constructible=False, paths=(f"{path}.func",))
-
-        return encoded
-
-    @staticmethod
-    def encode_generic(calculator: Any, path: str, inline_bytes: int) -> _Encoded:
-        """Encode a generic (non-dataclass, non-special) calculator."""
-        payload_items = calculator.signature_payload()
-        children: list[_Encoded] = []
-        identity: dict[str, Any] = {}
-        if payload_items is None:
-            identity["opaque_id"] = id(calculator)
-        else:
-            for key, value in payload_items.items():
-                enc = _Encoder.encode_value(value, f"{path}.identity.{key}", inline_bytes)
-                identity[key] = enc.value
-                children.append(enc)
-        deps = [
-            _Encoder.encode_calculator_value(dep, f"{path}.deps[{i}]", inline_bytes)
-            for i, dep in enumerate(calculator.dependencies())
-        ]
-        children.extend(deps)
-        ts, ts_children = _Encoder.transform_state(calculator, inline_bytes, path)
-        children.extend(ts_children)
-        payload: dict[str, Any] = {"node": "generic", "class": _class_path(calculator), "identity": identity}
-        if deps:
-            payload["deps"] = [e.value for e in deps]
-        if ts is not None:
-            payload["transform"] = ts
-        merged = _merge_encoded(payload, children)
-        return _Encoded(merged.value, constructible=False, paths=(*merged.paths, path))
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +414,7 @@ class _Decoder:
 
     @staticmethod
     def enum_(payload: dict[str, Any]) -> Any:
-        return _import_object(payload["class"])(payload["value"])
+        return import_object(payload["class"])(payload["value"])
 
     @staticmethod
     def family(payload: dict[str, Any]) -> Any:
@@ -649,109 +463,6 @@ class _Decoder:
             return calculator_from_signature(CalculatorSignature.from_dict(payload))
         return calculator_from_signature(CalculatorSignature(payload=payload))
 
-    # ------------------------------------------------------------------
-    # Calculator node decoders
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    @staticmethod
-    def decode_scoped(payload: dict[str, Any]) -> Any:
-        """Decode a plain calculator wrapped with a scope (see ``calculator_to_signature``)."""
-        base = _Decoder.decode_value(payload["base"])
-        base.scope = _Decoder.decode_scope(payload["scope"])
-        return base
-
-    @staticmethod
-    def decode_combined(payload: dict[str, Any]) -> Any:
-        from pynbodyext.core.calculate.nodes.base import CombinedCalculator
-
-        return CombinedCalculator(*(_Decoder.decode_value(item) for item in payload["items"]))
-
-    @staticmethod
-    def decode_transform_chain(payload: dict[str, Any]) -> Any:
-        cls = _import_object(payload["class"])
-        return _Decoder.apply_transform_state(
-            cls(*(_Decoder.decode_value(item) for item in payload["transforms"])), payload.get("transform")
-        )
-
-    @staticmethod
-    def decode_filter_op(payload: dict[str, Any]) -> Any:
-        from pynbodyext.core.calculate.nodes.filters import AndFilter, NotFilter, OrFilter
-
-        op = payload["op"]
-        if op == "and":
-            return AndFilter(_Decoder.decode_value(payload["left"]), _Decoder.decode_value(payload["right"]))
-        if op == "or":
-            return OrFilter(_Decoder.decode_value(payload["left"]), _Decoder.decode_value(payload["right"]))
-        if op == "not":
-            return NotFilter(_Decoder.decode_value(payload["child"]))
-        raise ValueError(f"unsupported filter op: {op!r}")
-
-    @staticmethod
-    def decode_constant_property(payload: dict[str, Any]) -> Any:
-        from pynbodyext.core.calculate.nodes.expr import ConstantProperty
-
-        return ConstantProperty(_Decoder.decode_value(payload["value"]))
-
-    @staticmethod
-    def decode_calculator_value_property(payload: dict[str, Any]) -> Any:
-        from pynbodyext.core.calculate.nodes.expr import CalculatorValueProperty
-
-        return CalculatorValueProperty(_Decoder.decode_value(payload["calculator"]))
-
-    @staticmethod
-    def decode_op_property(payload: dict[str, Any]) -> Any:
-        from pynbodyext.core.calculate.nodes.expr import OpProperty
-
-        return OpProperty(payload["op_name"], [_Decoder.decode_value(item) for item in payload["operands"]])
-
-    # ------------------------------------------------------------------
-    # Calculator dispatch
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def decode_special(payload: dict[str, Any]) -> Any:
-        """Decode a special (non-dataclass) calculator payload."""
-        node_type = payload["node"]
-        if node_type == "lambda_property":
-            raise ValueError("cannot reconstruct LambdaProperty from signature")
-        handler = _Decoder._SPECIAL_DECODERS.get(node_type)
-        if handler is None:
-            raise ValueError(f"unsupported special calculator node: {node_type!r}")
-        return handler(payload)
-
-    @staticmethod
-    def decode_dataclass(payload: dict[str, Any]) -> Any:
-        """Decode a dataclass calculator payload."""
-        cls = _import_object(payload["class"])
-        values = {name: _Decoder.decode_value(enc) for name, enc in payload.get("init", {}).items()}
-        return _Decoder.apply_transform_state(cls(**values), payload.get("transform"))
-
-    # ------------------------------------------------------------------
-    # Scope / transform helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def decode_scope(payload: dict[str, Any]) -> Any:
-        from pynbodyext.core.calculate.runtime.scopes import ScopeSpec
-
-        from .enums import RevertPolicy
-
-        transforms = tuple(_Decoder.decode_value(item) for item in payload.get("transforms", ()))
-        filter_node = _Decoder.decode_value(payload["filter"]) if "filter" in payload else None
-        revert_policy = RevertPolicy(payload.get("revert_policy", RevertPolicy.ALWAYS.value))
-        return ScopeSpec(transforms=transforms, filter=filter_node, revert_policy=revert_policy)
-
-    @staticmethod
-    def apply_transform_state(calculator: Any, payload: dict[str, Any] | None) -> Any:
-        if payload is not None:
-            if "revert_policy" in payload:
-                calculator.revert_policy = _Decoder.decode_value(payload["revert_policy"])
-            if "measure_filter" in payload:
-                calculator.measure_filter = _Decoder.decode_value(payload["measure_filter"])
-        return calculator
-
-
 # Populate handler dicts after class definition.
 _Decoder._VALUE_DECODERS = {
     "scalar": lambda p: p.get("value"),
@@ -766,15 +477,6 @@ _Decoder._VALUE_DECODERS = {
     "calculator": lambda p: _Decoder.decode_calculator_value(p["value"]),
     "unsupported": _Decoder.unsupported,
 }
-_Decoder._SPECIAL_DECODERS = {
-    "scoped": _Decoder.decode_scoped,
-    "combined": _Decoder.decode_combined,
-    "transform_chain": _Decoder.decode_transform_chain,
-    "filter_op": _Decoder.decode_filter_op,
-    "constant_property": _Decoder.decode_constant_property,
-    "calculator_value_property": _Decoder.decode_calculator_value_property,
-    "op_property": _Decoder.decode_op_property,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -786,28 +488,10 @@ def calculator_to_signature(
     calculator: Any, *, inline_array_bytes: int = DEFAULT_INLINE_ARRAY_BYTES, _path: str = "calculator"
 ) -> CalculatorSignature:
     """Return a structured signature for a calculator graph."""
-    from pynbodyext.core.calculate.nodes.base import CalculatorBase
-
-    if not isinstance(calculator, CalculatorBase):
-        raise TypeError(f"expected CalculatorBase, got {type(calculator)!r}")
-
-    encoded = _Encoder.encode_special(calculator, _path, inline_array_bytes)
-    if encoded is None:
-        if is_dataclass(calculator):
-            encoded = _Encoder.encode_dataclass(calculator, _path, inline_array_bytes)  # type: ignore[unreachable]
-        else:
-            encoded = _Encoder.encode_generic(calculator, _path, inline_array_bytes)
-
-    # A non-empty scope on a calculator must be part of its identity so a scoped
-    # clone gets a different cache key than the unscoped one.
-    scope_spec = getattr(calculator, "scope", None)
-    if scope_spec is not None and not scope_spec.is_empty:
-        scope_e = _Encoder.encode_scope(scope_spec, f"{_path}.scope", inline_array_bytes)
-        encoded = _merge_encoded({"node": "scoped", "base": encoded.value, "scope": scope_e.value}, [encoded, scope_e])
-
-    return CalculatorSignature(
-        payload=encoded.value, constructible=encoded.constructible, non_constructible_paths=encoded.paths
+    payload, constructible, paths = encode_calculator_payload(
+        calculator, path=_path, inline_array_bytes=inline_array_bytes
     )
+    return CalculatorSignature(payload=payload, constructible=constructible, non_constructible_paths=paths)
 
 
 def calculator_from_signature(signature: CalculatorSignature | dict[str, Any] | str) -> Any:
@@ -823,10 +507,7 @@ def calculator_from_signature(signature: CalculatorSignature | dict[str, Any] | 
         paths = ", ".join(signature.non_constructible_paths) or "unknown"
         raise ValueError(f"calculator signature is not constructible; non-constructible paths: {paths}")
 
-    payload = signature.payload
-    if payload.get("node") == "dataclass":
-        return _Decoder.decode_dataclass(payload)
-    return _Decoder.decode_special(payload)
+    return decode_calculator_payload(signature.payload)
 
 
 def _argument_value(calculator: Any, name: str) -> Any:
@@ -878,15 +559,15 @@ def calculator_pretty_init_args(calculator: Any, *, inline_array_bytes: int = DE
 
     from .render import TreePrinter, display_init_payload
 
-    class_path = _class_path(calculator)
+    path = class_path(calculator)
     payload = {
-        "class": class_path,
+        "class": path,
         "init": {name: enc.value for name, enc in _encode_init_entries(calculator, "init", inline_array_bytes)},
     }
     init_payload = display_init_payload(payload, inline_array_bytes=inline_array_bytes)
     if not init_payload:
         return ""
-    return TreePrinter.dataclass_args({"class": class_path, "init": init_payload})
+    return TreePrinter.dataclass_args({"class": path, "init": init_payload})
 
 
 # ---------------------------------------------------------------------------

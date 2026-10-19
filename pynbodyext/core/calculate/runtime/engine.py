@@ -103,6 +103,7 @@ from pynbodyext.core.calculate.result.result import (
     ValueSummary,
 )
 from pynbodyext.core.calculate.result.views import DiagnosticsView, ObservationsView, ReportsView
+from pynbodyext.util._type import class_path
 
 from ._engine_types import (
     _EvaluationPlan,
@@ -137,10 +138,6 @@ class EvalEngine:
 
     def __init__(self, *, sim_identity: SimIdentityProvider = id_based_sim_identity) -> None:
         self._sim_identity = sim_identity
-
-    def _class_path(self, value: Any) -> str:
-        cls = value if isinstance(value, type) else type(value)
-        return f"{cls.__module__}.{cls.__qualname__}"
 
     def run(
         self,
@@ -356,7 +353,7 @@ class EvalEngine:
             display_name=node.log_label,
             class_info=NodeClassInfo(
                 calculator_type=node.__class__.__name__,
-                calculator_class_path=self._class_path(node),
+                calculator_class_path=class_path(node),
             ),
             record=NodeRecord(policy=node.record_policy or ctx.options.default_record_policy),
         )
@@ -544,13 +541,9 @@ class EvalEngine:
     def _semantic_calculator_class_path(self, payload: Any) -> str | None:
         current = payload
         while isinstance(current, dict):
-            if current.get("node") == "bound":
-                current = current.get("base")
-                continue
-
-            class_path = current.get("class")
-            if isinstance(class_path, str):
-                return class_path
+            declared = current.get("class")
+            if isinstance(declared, str):
+                return declared
 
             if current.get("node") == "calculator_value_property":
                 current = current.get("calculator")
@@ -621,7 +614,7 @@ class EvalEngine:
             display_name=node.log_label,
             class_info=NodeClassInfo(
                 calculator_type=node.__class__.__name__,
-                calculator_class_path=self._class_path(node),
+                calculator_class_path=class_path(node),
                 semantic_calculator_class_path=self._semantic_calculator_class_path(structured_signature.payload),
             ),
             record=NodeRecord(policy=node.record_policy or ctx.options.default_record_policy),

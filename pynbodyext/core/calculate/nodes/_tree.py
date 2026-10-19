@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pynbodyext.core.calculate.display import hidden_summary, tree_lines
+
 if TYPE_CHECKING:
     from pynbodyext.core.calculate.nodes.base import CalculatorBase
 
@@ -45,72 +47,14 @@ def label_for(node: CalculatorBase[Any, Any], *, show_inputs: bool, compact_kind
     return f"{label}<{kind}>"
 
 
+def children_of(node: CalculatorBase[Any, Any]) -> list[CalculatorBase[Any, Any]]:
+    """The child nodes of *node*, as the tree walkers want them."""
+    return node.children()
+
+
 def hidden_label(children: list[CalculatorBase[Any, Any]]) -> str:
     """Describe *children* that are elided from a truncated tree."""
-    if not children:
-        return "..."
-
-    descendants = 0
-    stack = list(children)
-    seen: set[int] = set()
-
-    while stack:
-        current = stack.pop()
-        key = id(current)
-        if key in seen:
-            continue
-        seen.add(key)
-        descendants += 1
-        stack.extend(current.children())
-
-    suffix = "node" if descendants == 1 else "nodes"
-    return f"... {descendants} {suffix} hidden"
-
-
-def render_children(
-    node: CalculatorBase[Any, Any],
-    *,
-    prefix: str,
-    depth: int,
-    max_depth: int | None,
-    max_children: int | None,
-    show_inputs: bool,
-    compact_kinds: bool,
-) -> list[str]:
-    """Render the subtree rooted at *node* as a list of tree lines."""
-    children = node.children()
-    if not children:
-        return []
-
-    if max_depth is not None and depth >= max_depth:
-        return [f"{prefix}└─ {hidden_label(children)}"]
-
-    visible_children = children if max_children is None else children[:max_children]
-    hidden_children = [] if max_children is None else children[max_children:]
-
-    lines: list[str] = []
-    for index, child in enumerate(visible_children):
-        is_last = index == len(visible_children) - 1 and not hidden_children
-        branch = "└─" if is_last else "├─"
-        lines.append(f"{prefix}{branch} {label_for(child, show_inputs=show_inputs, compact_kinds=compact_kinds)}")
-
-        child_prefix = prefix + ("   " if is_last else "│  ")
-        lines.extend(
-            render_children(
-                child,
-                prefix=child_prefix,
-                depth=depth + 1,
-                max_depth=max_depth,
-                max_children=max_children,
-                show_inputs=show_inputs,
-                compact_kinds=compact_kinds,
-            )
-        )
-
-    if hidden_children:
-        lines.append(f"{prefix}└─ {hidden_label(hidden_children)}")
-
-    return lines
+    return hidden_summary(children, key=id, children=children_of)
 
 
 def render_tree(
@@ -127,27 +71,17 @@ def render_tree(
     ``max_children`` truncate a large graph (elided subtrees are summarised),
     which is why the parameterised builder lives here rather than on the
     attribute itself.
+
+    The walk itself comes from :func:`pynbodyext.core.calculate.display.tree_lines`,
+    which the result trees share, so this function only decides what a node's
+    label looks like.
     """
-    if max_depth is not None and max_depth < 0:
-        raise ValueError("max_depth must be non-negative or None")
-    if max_children is not None and max_children < 0:
-        raise ValueError("max_children must be non-negative or None")
-
-    lines = [label_for(node, show_inputs=show_inputs, compact_kinds=compact_kinds)]
-
-    if max_depth == 0 and node.children():
-        lines.append(f"└─ {hidden_label(node.children())}")
-    else:
-        lines.extend(
-            render_children(
-                node,
-                prefix="",
-                depth=1,
-                max_depth=max_depth,
-                max_children=max_children,
-                show_inputs=show_inputs,
-                compact_kinds=compact_kinds,
-            )
-        )
-
+    lines = tree_lines(
+        node,
+        children=children_of,
+        label=lambda current: label_for(current, show_inputs=show_inputs, compact_kinds=compact_kinds),
+        hidden=hidden_label,
+        max_depth=max_depth,
+        max_children=max_children,
+    )
     return "\n" + "\n".join(lines)

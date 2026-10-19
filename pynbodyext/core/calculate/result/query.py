@@ -20,7 +20,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pynbodyext.core.calculate.diagnostics.observer import format_observation_access
-from pynbodyext.core.calculate.display import display_value, format_time
+from pynbodyext.core.calculate.display import (
+    display_value,
+    format_time,
+    hidden_summary,
+    subtree_nodes,
+    tree_lines,
+    validate_tree_limits,
+)
+from pynbodyext.util._type import class_path
 
 from .enums import NodeStatus
 from .result import PhaseRecord, Result, ResultNode
@@ -30,11 +38,6 @@ if TYPE_CHECKING:
 
 
 class ResultQuery:
-    @staticmethod
-    def _class_path(value: Any) -> str:
-        cls = value if isinstance(value, type) else type(value)
-        return f"{cls.__module__}.{cls.__qualname__}"
-
     @staticmethod
     def _short_class_name(path: str | None) -> str | None:
         if path is None:
@@ -83,10 +86,10 @@ class ResultQuery:
                     ResultQuery._short_class_name(node.class_info.semantic_calculator_class_path),
                 }
             if isinstance(query, type):
-                class_path = ResultQuery._class_path(query)
+                wanted = class_path(query)
                 class_name = query.__name__
                 return lambda node: (
-                    class_path in {node.class_info.semantic_calculator_class_path, node.class_info.calculator_class_path}
+                    wanted in {node.class_info.semantic_calculator_class_path, node.class_info.calculator_class_path}
                     or node.class_info.calculator_type == class_name
                 )
             cache_key_factory = getattr(query, "cache_key", None)
@@ -270,30 +273,23 @@ class ResultQuery:
 
     @staticmethod
     def _validate_tree_limits(max_depth: int | None, max_children: int | None) -> None:
-        if max_depth is not None and max_depth < 0:
-            raise ValueError("max_depth must be non-negative or None")
-        if max_children is not None and max_children < 0:
-            raise ValueError("max_children must be non-negative or None")
+        validate_tree_limits(max_depth, max_children)
 
     @staticmethod
     def _subtree_nodes(result: Result[Any], roots: list[ResultNode]) -> list[ResultNode]:
-        out: list[ResultNode] = []
-        seen: set[str] = set()
-        stack = list(reversed(roots))
-        while stack:
-            node = stack.pop()
-            if node.node_id in seen:
-                continue
-            seen.add(node.node_id)
-            out.append(node)
-            stack.extend(reversed(ResultQuery.display_children_of(result, node)))
-        return out
+        return subtree_nodes(
+            roots,
+            lambda node: ResultQuery.display_children_of(result, node),
+            key=lambda node: node.node_id,
+        )
 
     @staticmethod
     def _hidden_count_label(result: Result[Any], roots: list[ResultNode]) -> str:
-        count = len(ResultQuery._subtree_nodes(result, roots))
-        suffix = "node" if count == 1 else "nodes"
-        return f"... {count} {suffix} hidden"
+        return hidden_summary(
+            roots,
+            key=lambda node: node.node_id,
+            children=lambda node: ResultQuery.display_children_of(result, node),
+        )
 
     @staticmethod
     def _visible_tree_nodes(
@@ -498,40 +494,17 @@ class ResultQuery:
         max_depth: int | None = None,
         max_children: int | None = None,
     ) -> str:
-        ResultQuery._validate_tree_limits(max_depth, max_children)
         start = result.root if node is None else ResultQuery.resolve_node(result, node)
-
-        def render(current: ResultNode, prefix: str, is_last: bool, depth: int) -> list[str]:
-            branch = "└─" if is_last else "├─"
-            lines = [f"{prefix}{branch} {ResultQuery.node_label(current, show_ids=show_ids)}"]
-            child_prefix = prefix + ("   " if is_last else "│  ")
-            children = ResultQuery.display_children_of(result, current)
-            if max_depth is not None and depth >= max_depth and children:
-                lines.append(f"{child_prefix}└─ {ResultQuery._hidden_count_label(result, children)}")
-                return lines
-
-            visible_children = children if max_children is None else children[:max_children]
-            hidden_children = [] if max_children is None else children[max_children:]
-            for index, child in enumerate(visible_children):
-                is_child_last = index == len(visible_children) - 1 and not hidden_children
-                lines.extend(render(child, child_prefix, is_child_last, depth + 1))
-            if hidden_children:
-                lines.append(f"{child_prefix}└─ {ResultQuery._hidden_count_label(result, hidden_children)}")
-            return lines
-
-        lines = [ResultQuery.node_label(start, show_ids=show_ids)]
-        children = ResultQuery.display_children_of(result, start)
-        if max_depth == 0 and children:
-            lines.append(f"└─ {ResultQuery._hidden_count_label(result, children)}")
-        else:
-            visible_children = children if max_children is None else children[:max_children]
-            hidden_children = [] if max_children is None else children[max_children:]
-            for index, child in enumerate(visible_children):
-                is_child_last = index == len(visible_children) - 1 and not hidden_children
-                lines.extend(render(child, "", is_child_last, 1))
-            if hidden_children:
-                lines.append(f"└─ {ResultQuery._hidden_count_label(result, hidden_children)}")
-        return "\n".join(lines)
+        return "\n".join(
+            tree_lines(
+                start,
+                children=lambda current: ResultQuery.display_children_of(result, current),
+                label=lambda current: ResultQuery.node_label(current, show_ids=show_ids),
+                hidden=lambda nodes: ResultQuery._hidden_count_label(result, nodes),
+                max_depth=max_depth,
+                max_children=max_children,
+            )
+        )
 
     @staticmethod
     def execution_tree(
@@ -546,12 +519,11 @@ class ResultQuery:
         include_observer: bool = True,
         include_values: bool = False,
     ) -> str:
-        ResultQuery._validate_tree_limits(max_depth, max_children)
         start = result.root if node is None else ResultQuery.resolve_node(result, node)
         cache_events = ResultQuery._cache_events_by_node(result)
         rendered_nodes: set[str] = set()
 
-        def label(current: ResultNode, *, hit_occurrence: bool = False) -> str:
+        def label(current: ResultNode) -> str:
             return ResultQuery._execution_label(
                 result,
                 current,
@@ -561,52 +533,34 @@ class ResultQuery:
                 include_observer=include_observer,
                 include_values=include_values,
                 cache_events=cache_events,
-                hit_occurrence=hit_occurrence,
+                # A node that the walk has already rendered is shown as a hit
+                # again rather than descended into a second time.
+                hit_occurrence=current.node_id in rendered_nodes,
             )
 
-        def hidden_summary(children: list[ResultNode]) -> str:
+        def hidden(current: list[ResultNode]) -> str:
             return ResultQuery._hidden_execution_summary(
                 result,
-                children,
+                current,
                 include_perf=include_perf,
                 include_cache=include_cache,
                 include_observer=include_observer,
                 cache_events=cache_events,
             )
 
-        def render(current: ResultNode, prefix: str, is_last: bool, depth: int) -> list[str]:
-            branch = "└─" if is_last else "├─"
-            hit_occurrence = current.node_id in rendered_nodes
-            lines = [f"{prefix}{branch} {label(current, hit_occurrence=hit_occurrence)}"]
-            if hit_occurrence:
-                return lines
+        def children_of(current: ResultNode) -> list[ResultNode]:
+            if current.node_id in rendered_nodes:
+                return []
             rendered_nodes.add(current.node_id)
-            child_prefix = prefix + ("   " if is_last else "│  ")
-            children = ResultQuery.display_children_of(result, current)
-            if max_depth is not None and depth >= max_depth and children:
-                lines.append(f"{child_prefix}└─ {hidden_summary(children)}")
-                return lines
+            return ResultQuery.display_children_of(result, current)
 
-            visible_children = children if max_children is None else children[:max_children]
-            hidden_children = [] if max_children is None else children[max_children:]
-            for index, child in enumerate(visible_children):
-                is_child_last = index == len(visible_children) - 1 and not hidden_children
-                lines.extend(render(child, child_prefix, is_child_last, depth + 1))
-            if hidden_children:
-                lines.append(f"{child_prefix}└─ {hidden_summary(hidden_children)}")
-            return lines
-
-        lines = [label(start)]
-        rendered_nodes.add(start.node_id)
-        children = ResultQuery.display_children_of(result, start)
-        if max_depth == 0 and children:
-            lines.append(f"└─ {hidden_summary(children)}")
-        else:
-            visible_children = children if max_children is None else children[:max_children]
-            hidden_children = [] if max_children is None else children[max_children:]
-            for index, child in enumerate(visible_children):
-                is_child_last = index == len(visible_children) - 1 and not hidden_children
-                lines.extend(render(child, "", is_child_last, 1))
-            if hidden_children:
-                lines.append(f"└─ {hidden_summary(hidden_children)}")
-        return "\n".join(lines)
+        return "\n".join(
+            tree_lines(
+                start,
+                children=children_of,
+                label=label,
+                hidden=hidden,
+                max_depth=max_depth,
+                max_children=max_children,
+            )
+        )

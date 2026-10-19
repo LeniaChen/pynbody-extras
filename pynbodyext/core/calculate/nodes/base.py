@@ -205,7 +205,7 @@ class CalculatorBase(
         cls, target: type[TCalc] | None = None, **dataclass_kwargs: Any
     ) -> type[TCalc] | Callable[[type[TCalc]], type[TCalc]]:
         """Decorate an explicit subclass with dataclass-style calculator fields."""
-        from pynbodyext.core.calculate.params.declarative import dataclass_calc
+        from pynbodyext.core.calculate.nodes.declarative import dataclass_calc
 
         def wrap(raw_cls: type[TCalc]) -> type[TCalc]:
             if not issubclass(raw_cls, cls):

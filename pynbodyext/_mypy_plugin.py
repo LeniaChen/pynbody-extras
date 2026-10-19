@@ -22,7 +22,7 @@ PARAM_FULLNAME = "pynbodyext.core.calculate.params.fields.Param"
 
 _DECORATORS = {
     "pynbodyext.core.calculate.nodes.base.CalculatorBase.dataclass",
-    "pynbodyext.core.calculate.params.declarative.dataclass_calc",
+    "pynbodyext.core.calculate.nodes.declarative.dataclass_calc",
 }
 
 _CALCULATOR_CLASSES: set[str] = set()

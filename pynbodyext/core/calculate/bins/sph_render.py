@@ -171,17 +171,32 @@ Requirements
 
 ``pynbody.sph`` is imported on first use, so importing the bins package stays
 light.
+
+Where the pieces live
+---------------------
+This module is the *view*: it decides which engine answers a statistic, walks the
+cell slabs, and hands the result back in the bins' own axis order.  The parts a
+maintainer is likely to reach for live beside it:
+
+- :mod:`._sph_geometry` — the plan (validated axes, particle positions, smoothing
+  lengths, periodic box), the per-axis grid a scatter needs, the periodic images
+  that can reach the grid, and the wrap/axis-order conventions.
+- :mod:`._sph_scatter` — the pair engines: the compiled one through
+  ``pynbodyext._native``, the NumPy fallback, and the kernel lookup both weigh with.
+- :mod:`._pynbody_render` — the two private pynbody renderer entry points the
+  kernel sums go through.
 """
 
 from __future__ import annotations
 
-import itertools
 import warnings
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
+from ._pynbody_render import projected_kernel_sum, volume_kernel_sum
+from ._sph_geometry import SPATIAL, images, layout, slab_grid, to_axis_order, wrap_offsets
+from ._sph_scatter import pairs_for_slab
 from .model import BinResultModel
 from .query import DensityResolver, QueryCache, _wrap, evaluate_derived
 from .statistics import (
@@ -197,7 +212,6 @@ from .statistics import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
 
     from pynbody.sph.kernels import KernelBase
 
@@ -207,17 +221,11 @@ if TYPE_CHECKING:
 
 __all__ = ["BinSphRenderMixin", "SphRender"]
 
-#: The spatial axes a render understands, in the order the renderers index them.
-_SPATIAL = ("x", "y", "z")
-
 #: Statistics built from one or two kernel sums (no neighbour lists needed).
 _SUM_STATISTICS = (Sum, Mean, RMS, Dispersion)
 
 #: Statistics that need the per-cell neighbour lists: a weighted quantile.
 _QUANTILE_STATISTICS = (Median, Percentile)
-
-#: Column of :attr:`BinResultModel.position` each spatial axis lives in.
-_AXIS_COLUMN = {"x": 0, "y": 1, "z": 2}
 
 #: Rows of cells the quantile engine scatters at a time.  Peak memory is set by the
 #: particle-cell pairs inside one slab, so this trades passes over the particles
@@ -228,7 +236,8 @@ _SLAB_ROWS = 32
 _ENTRY_WARNING = 50_000_000
 
 #: Where a render gets its smoothing lengths: the snapshot's own array, or a
-#: derivation over the whole particle set.  See :meth:`SphRender._smooth_array`.
+#: derivation over the whole particle set.  See
+#: :func:`pynbodyext.core.calculate.bins._sph_geometry.smooth_array`.
 _SMOOTH_SOURCES = ("snapshot", "kdtree")
 
 #: Sentinel for :meth:`SphRender.__call__`, meaning "keep this view's setting".
@@ -483,48 +492,11 @@ class SphRender:
             smooth=self._smooth_source,
         )
 
-    def _smooth_array(self, sim: Any) -> np.ndarray:
-        """The smoothing length of every particle, in the position units.
-
-        ``smooth="snapshot"`` (the default) reads ``sim["smooth"]`` — pynbody's
-        on-disk values where they exist, and its k-d tree estimate for a single
-        family that has none.  A *mixed* set can be refused this way; the error
-        names ``smooth="kdtree"``, which derives the whole array with
-        :func:`pynbody.sph.smooth` instead.  That is the same run pynbody's own
-        ``rho`` uses, and the only way to render a particle set whose families do
-        not all carry the block.
-        """
-        if self._smooth_source == "kdtree":
-            from pynbody.sph import smooth as derive_smoothing
-
-            try:
-                return np.asarray(derive_smoothing(sim), dtype=float)
-            except Exception as exc:  # noqa: BLE001 - report whatever it was, with the cause attached
-                raise ValueError(
-                    "sph_render could not derive smoothing lengths for this particle set with "
-                    f"pynbody.sph.smooth: {type(exc).__name__}: {exc}"
-                ) from exc
-        try:
-            return np.asarray(sim["smooth"], dtype=float)
-        except Exception as exc:  # noqa: BLE001 - the spelling of "no such array" is the subclass's business
-            # pynbody spells it KeyError, but a snapshot wrapper may raise anything
-            # (a custom ``__getitem__`` often falls through to TypeError).  Type is
-            # what the caller cannot guess, so it goes in the message; the original
-            # exception stays attached as the cause.
-            raise ValueError(
-                "sph_render needs a smoothing length for every particle, and this particle set does not "
-                "provide one: pynbody derives 'smooth' on demand for a single family, but a mixed set must "
-                "carry one for each of them (usually only the gas does).  Render a family or sub-result "
-                "that has it — bins.gas.sph_render[...] — give 'smooth' to every family first, or call "
-                'bins.sph_render(smooth="kdtree") to derive one for the whole set.  '
-                f"(reading sim['smooth'] raised {type(exc).__name__}.)"
-            ) from exc
-
     def _statistic(self, statistic: Any, values: np.ndarray, weights: np.ndarray | None) -> np.ndarray:
         """One kernel sum for ``sum``/``count``, a ratio of two for the mean-likes."""
         if isinstance(statistic, _QUANTILE_STATISTICS):
             plan = self._layout()
-            return self._to_axis_order(self._quantile(statistic, values, weights, plan), plan)
+            return to_axis_order(self._quantile(statistic, values, weights, plan), plan, self._result.model.axes)
         weight = np.ones_like(values) if weights is None else weights
         if isinstance(statistic, Sum):
             return self._render(values * weight)
@@ -563,18 +535,14 @@ class SphRender:
         everything the kernel reaches.
         """
         present = plan["present"]
-        axes = plan["axes"]
-        shape = tuple(axes[prop].nbins for prop in present)
-        columns = [_AXIS_COLUMN[prop] for prop in present]
-        centres = [_cell_centres(axes[prop]) for prop in present]
-        origins = [float(axes[prop].edges[0]) for prop in present]
-        widths = [plan["widths"][prop] for prop in present]
-        strides = [int(np.prod(shape[index + 1 :], dtype=int)) for index in range(len(shape))]
+        shape = tuple(plan["axes"][prop].nbins for prop in present)
+        grid = slab_grid(plan)
+        widths = list(grid.widths)
         quantity = np.asarray(values, dtype=float)
         extra = np.ones_like(quantity) if weights is None else np.asarray(weights, dtype=float)
 
-        particle, shift = self._images(plan)
-        position = plan["position"][particle][:, columns] + shift
+        particle, shift = images(plan, self._smoothing(plan["smooth"]))
+        position = plan["position"][particle][:, list(grid.columns)] + shift
         smoothing = self._smoothing(plan["smooth"])[particle]
         support = 2.0 * smoothing
         value = quantity[particle]
@@ -584,24 +552,12 @@ class SphRender:
         self._warn_if_expensive(position, support, widths, shape)
 
         out = np.empty(shape, dtype=float)
-        row = strides[0]
+        row = grid.strides[0]
         for low in range(0, shape[0], _SLAB_ROWS):
             high = min(low + _SLAB_ROWS, shape[0])
             slab_cells = (high - low) * row
-            cell, entry_value, entry_weight = self._pairs(
-                position,
-                smoothing,
-                support,
-                value,
-                weight,
-                centres,
-                origins,
-                widths,
-                strides,
-                low,
-                high,
-                kernel,
-                measure,
+            cell, entry_value, entry_weight = pairs_for_slab(
+                position, smoothing, support, value, weight, grid, low, high, kernel, measure
             )
             # Bucketing reduces the slab in O(pairs) instead of ordering it; the
             # answer is the same one :func:`weighted_percentiles` gives.
@@ -611,82 +567,6 @@ class SphRender:
             )
             out[low:high] = np.asarray(reduced, dtype=float).reshape((high - low, *shape[1:]))
         return out
-
-    def _pairs(
-        self,
-        position: np.ndarray,
-        smoothing: np.ndarray,
-        support: np.ndarray,
-        value: np.ndarray,
-        extra: np.ndarray,
-        centres: list[np.ndarray],
-        origins: list[float],
-        widths: list[float],
-        strides: list[int],
-        low: int,
-        high: int,
-        kernel: Any,
-        measure: float,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """``(cell, value, weight)`` for every particle-cell pair in one slab.
-
-        The compiled kernel does the work of :func:`_scatter_pairs` *and* pynbody's
-        kernel lookup — the ``result[...] += ...`` loop of its renderer, writing
-        pair records instead of sums — and is roughly an order of magnitude faster;
-        the NumPy fallback keeps the layer working without the optional extension
-        and weighs the pairs with the same lookup in :func:`_kernel_weights`.
-        """
-        builder = _native_pair_builder()
-        if builder is not None:
-            cell, values, weights = builder(
-                np.ascontiguousarray(position, dtype=float),
-                np.ascontiguousarray(smoothing, dtype=float),
-                np.ascontiguousarray(support, dtype=float),
-                np.ascontiguousarray(value, dtype=float),
-                np.ascontiguousarray(extra, dtype=float),
-                _kernel_table(kernel),
-                int(getattr(kernel, "h_power", 3)),
-                float(measure),
-                list(origins),
-                list(widths),
-                [len(centre) for centre in centres],
-                list(strides),
-                int(low),
-                int(high),
-                0,
-            )
-            return (np.asarray(cell, dtype=np.intp), np.asarray(values, dtype=float), np.asarray(weights, dtype=float))
-        cell, distance, found = _scatter_pairs(
-            position, smoothing, support, centres, origins, widths, strides, low, high
-        )
-        weight = _kernel_weights(np.sqrt(distance), smoothing[found], kernel) * measure * extra[found]
-        return cell, value[found], weight
-
-    def _images(self, plan: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
-        """Particle indices and per-axis shifts for every image that can reach the grid.
-
-        A periodic box means a particle near one edge reaches cells at the other, so
-        a handful of shifted copies are needed — the same repeats pynbody's renderer
-        uses.  Only the particles an image brings within reach are kept, so the
-        common case costs one pass and no copies.
-        """
-        present = plan["present"]
-        columns = [_AXIS_COLUMN[prop] for prop in present]
-        position = plan["position"][:, columns]
-        support = 2.0 * self._smoothing(plan["smooth"])
-        bounds = [(float(plan["axes"][prop].edges[0]), float(plan["axes"][prop].edges[-1])) for prop in present]
-        parts: list[np.ndarray] = []
-        shifts: list[np.ndarray] = []
-        for shift in _offset_vectors(plan["boxsize"], [plan["axes"][prop] for prop in present]):
-            reaches = np.ones(len(position), dtype=bool)
-            for axis, (low, high) in enumerate(bounds):
-                moved = position[:, axis] + shift[axis]
-                reaches &= (moved + support > low) & (moved - support < high)
-            if reaches.any():
-                picked = np.flatnonzero(reaches)
-                parts.append(picked)
-                shifts.append(np.tile(shift, (len(picked), 1)))
-        return np.concatenate(parts), np.concatenate(shifts)
 
     def _warn_if_expensive(
         self, position: np.ndarray, support: np.ndarray, widths: list[float], shape: tuple[int, ...]
@@ -709,48 +589,7 @@ class SphRender:
         """Validate the result once, and cache what a render needs from it."""
         if self._plan is not None:
             return self._plan
-
-        model = self._result.model
-        axes = model.axes
-        props = [str(axis.prop) for axis in axes]
-        if len(axes) not in (2, 3):
-            raise ValueError(
-                f"sph_render needs 2 or 3 axes (a plane or a volume); this result has {len(axes)} ({props})."
-            )
-        if any(prop not in _SPATIAL for prop in props) or len(set(props)) != len(props):
-            raise ValueError(
-                f"sph_render renders onto the sky/volume, so its axes must be distinct spatial ones; "
-                f"this result has {props} — rebuild the bins from x/y/z."
-            )
-        for axis in axes:
-            if not _is_uniform(axis):
-                label = axis.alias or axis.prop
-                raise ValueError(
-                    f"sph_render needs evenly spaced bins: axis {label!r} has bins of unequal width. Use mode='linear'."
-                )
-
-        sim = model.sim
-        smooth = self._smooth_array(sim)
-        if not np.all(np.isfinite(smooth)) or np.any(smooth <= 0.0):
-            raise ValueError(
-                "sph_render needs finite, positive smoothing lengths; this snapshot's 'smooth' array "
-                "has zeros or non-finite values."
-            )
-
-        by_prop = {str(axis.prop): axis for axis in axes}
-        widths = {prop: float(axis.edges[1] - axis.edges[0]) for prop, axis in by_prop.items()}
-        present = [prop for prop in _SPATIAL if prop in by_prop]
-        measure = float(np.prod([widths[prop] for prop in present]))
-
-        self._plan = {
-            "axes": by_prop,
-            "present": present,
-            "widths": widths,
-            "measure": measure,
-            "position": _position_array(sim, by_prop),
-            "smooth": smooth,
-            "boxsize": _boxsize(sim) if self._wrap else None,
-        }
+        self._plan = layout(self._result.model, wrap=self._wrap, smooth_source=self._smooth_source)
         return self._plan
 
     def _kernel(self, *, projected: bool) -> Any:
@@ -765,7 +604,7 @@ class SphRender:
     # ----------------------------------------------------------------- render
     def _render(self, quantity: np.ndarray) -> np.ndarray:
         """Kernel sum of *quantity* over the cells, in the result's axis order."""
-        return self._to_axis_order(self._render_cells(quantity), self._layout())
+        return to_axis_order(self._render_cells(quantity), self._layout(), self._result.model.axes)
 
     def _render_cells(self, quantity: np.ndarray) -> np.ndarray:
         """Kernel sum of *quantity*, in the order the cell grid is indexed here."""
@@ -773,11 +612,6 @@ class SphRender:
         if len(plan["present"]) == 2:
             return self._render_projected(quantity, plan)
         return self._render_volume(quantity, plan)
-
-    def _to_axis_order(self, rendered: np.ndarray, plan: dict[str, Any]) -> np.ndarray:
-        """Reorder an ``(x, y[, z])`` grid into the result's own axis order."""
-        order = [plan["present"].index(str(axis.prop)) for axis in self._result.model.axes]
-        return np.transpose(rendered, np.argsort(order))
 
     def _render_projected(self, quantity: np.ndarray, plan: dict[str, Any]) -> np.ndarray:
         r"""Project along the missing axis with pynbody's C renderer.
@@ -788,47 +622,30 @@ class SphRender:
         one so that nothing is weighted twice.  Multiplying by the cell area makes
         the weight dimensionless, and by the cell measure we keep the units of the
         strict query rather than pynbody's per-area ones.
-        """
-        from pynbody.sph import _render
 
+        The private call itself lives in
+        :mod:`pynbodyext.core.calculate.bins._pynbody_render`.
+        """
         first, second = plan["present"]
         coord = {"x": 0, "y": 1, "z": 2}
         position = plan["position"]
-        smooth = self._smoothing(plan["smooth"])
         first_axis, second_axis = plan["axes"][first], plan["axes"][second]
-        ones = np.ones_like(quantity)
 
-        image = _render.render_image(
-            first_axis.nbins,
-            second_axis.nbins,
-            position[:, coord[first]],
-            position[:, coord[second]],
-            position[:, 2],
-            smooth,
-            float(first_axis.edges[0]),
-            float(first_axis.edges[-1]),
-            float(second_axis.edges[0]),
-            float(second_axis.edges[-1]),
-            0.0,
-            0.0,
-            quantity,
-            ones,
-            ones,
-            0.0,
-            np.inf,
-            -np.inf,
-            np.inf,
-            # pynbody's own "min_smooth" clamp, left at 0 because ``_smoothing``
-            # already applied the floor: ``to_3d_grid`` has no such parameter and
-            # the quantile engine needs the floored values too, so the clamp lives
-            # in one place for every path rather than in two here.
-            0.0,
-            self._kernel(projected=True),
-            self._wrap_offsets(first_axis, plan["boxsize"]),
-            self._wrap_offsets(second_axis, plan["boxsize"]),
+        rendered = projected_kernel_sum(
+            nx=first_axis.nbins,
+            ny=second_axis.nbins,
+            x_range=(float(first_axis.edges[0]), float(first_axis.edges[-1])),
+            y_range=(float(second_axis.edges[0]), float(second_axis.edges[-1])),
+            x=position[:, coord[first]],
+            y=position[:, coord[second]],
+            z=position[:, 2],
+            smoothing=self._smoothing(plan["smooth"]),
+            quantity=quantity,
+            kernel=self._kernel(projected=True),
+            wrap_x=wrap_offsets(first_axis, plan["boxsize"]),
+            wrap_y=wrap_offsets(second_axis, plan["boxsize"]),
         )
-        # render_image returns (second, first); the result indexes (first, second).
-        return np.asarray(image).T * plan["measure"]
+        return rendered * plan["measure"]
 
     def _render_volume(self, quantity: np.ndarray, plan: dict[str, Any]) -> np.ndarray:
         r"""Render onto the 3-D cell grid with pynbody's own renderer.
@@ -836,50 +653,28 @@ class SphRender:
         Same convention as the projected path — pynbody's kernel, ``mass``/``rho``
         set to one so nothing is weighted twice, multiplied by the cell volume to
         keep the units of the strict query.
-        """
-        from pynbody.sph import _render
 
+        The private call itself lives in
+        :mod:`pynbodyext.core.calculate.bins._pynbody_render`.
+        """
         axes = plan["axes"]
         position = plan["position"]
-        smooth = self._smoothing(plan["smooth"])
-        ones = np.ones_like(quantity)
-        bounds = {prop: (float(axes[prop].edges[0]), float(axes[prop].edges[-1])) for prop in _SPATIAL}
+        bounds = {prop: (float(axes[prop].edges[0]), float(axes[prop].edges[-1])) for prop in SPATIAL}
 
-        volume = _render.to_3d_grid(
-            axes["x"].nbins,
-            axes["y"].nbins,
-            axes["z"].nbins,
-            position[:, 0],
-            position[:, 1],
-            position[:, 2],
-            smooth,
-            bounds["x"][0],
-            bounds["x"][1],
-            bounds["y"][0],
-            bounds["y"][1],
-            bounds["z"][0],
-            bounds["z"][1],
-            quantity,
-            ones,
-            ones,
-            0.0,
-            np.inf,
-            self._kernel(projected=False),
-            self._wrap_offsets(axes["x"], plan["boxsize"]),
-            self._wrap_offsets(axes["y"], plan["boxsize"]),
-            self._wrap_offsets(axes["z"], plan["boxsize"]),
+        volume = volume_kernel_sum(
+            nbins=(axes["x"].nbins, axes["y"].nbins, axes["z"].nbins),
+            bounds=(bounds["x"], bounds["y"], bounds["z"]),
+            coordinates=(position[:, 0], position[:, 1], position[:, 2]),
+            smoothing=self._smoothing(plan["smooth"]),
+            quantity=quantity,
+            kernel=self._kernel(projected=False),
+            wrap=(
+                wrap_offsets(axes["x"], plan["boxsize"]),
+                wrap_offsets(axes["y"], plan["boxsize"]),
+                wrap_offsets(axes["z"], plan["boxsize"]),
+            ),
         )
-        return np.asarray(volume) * plan["measure"]
-
-    # ------------------------------------------------------------------ wrap
-    def _wrap_offsets(self, axis: Any, boxsize: float | None) -> list[float]:
-        """The offsets along one axis, as pynbody's renderer builds them."""
-        if boxsize is None:
-            return [0.0]
-        span = float(axis.edges[-1] - axis.edges[0])
-        repeats = int(round(span / (2.0 * boxsize))) + 1
-        return list(np.linspace(-repeats * boxsize, repeats * boxsize, 2 * repeats + 1))
-
+        return volume * plan["measure"]
 
 class BinSphRenderMixin:
     """Provides the :attr:`sph_render` view for :class:`~.result.BinNDResult`."""
@@ -975,100 +770,6 @@ class BinSphRenderMixin:
         return render
 
 
-def _is_uniform(axis: Any) -> bool:
-    edges = np.asarray(axis.edges, dtype=float)
-    return bool(np.allclose(np.diff(edges), np.diff(edges)[0]))
-
-
-def _cell_centres(axis: Any) -> np.ndarray:
-    edges = np.asarray(axis.edges, dtype=float)
-    return 0.5 * (edges[:-1] + edges[1:])
-
-
-def _offset_vectors(boxsize: float | None, axes: list[Any]) -> list[tuple[float, ...]]:
-    """Every combination of per-axis periodic shifts that could matter.
-
-    pynbody's renderer repeats particles by whole boxes when a snapshot is periodic
-    (``_calculate_wrapping_repeat_array``); the same repeats are needed here, and
-    ``boxsize is None`` means the single, unshifted case.
-    """
-    if boxsize is None:
-        return [tuple(0.0 for _ in axes)]
-    per_axis = []
-    for axis in axes:
-        span = float(axis.edges[-1] - axis.edges[0])
-        repeats = int(round(span / (2.0 * boxsize))) + 1
-        per_axis.append(np.linspace(-repeats * boxsize, repeats * boxsize, 2 * repeats + 1))
-    return [tuple(float(component) for component in combination) for combination in itertools.product(*per_axis)]
-
-
-def _scatter_pairs(
-    position: np.ndarray,
-    smoothing: np.ndarray,
-    support: np.ndarray,
-    centres: list[np.ndarray],
-    origins: list[float],
-    widths: list[float],
-    strides: list[int],
-    low_row: int,
-    high_row: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Every ``(cell, distance², row)`` inside one slab of rows, in NumPy.
-
-    Each particle's cell range comes from its own support (``2h``) and the uniform
-    grid, so the block of cells one particle touches is a rectangular range;
-    the ranges of all particles are then expanded into flat arrays at once
-    (``np.repeat`` and a mixed-radix decomposition) rather than in a Python loop.
-    Nothing is ordered: the caller reduces with a per-entry sample index, which is
-    what :func:`~.statistics.bucketed_weighted_percentiles` takes.  The compiled
-    kernel in ``cpp/image/scatter.cpp`` does the same arithmetic; this is the
-    fallback for an install without it.
-    """
-    dimensions = len(centres)
-    ranges: list[tuple[np.ndarray, np.ndarray]] = []
-    for axis in range(dimensions):
-        low = np.floor((position[:, axis] - support - origins[axis]) / widths[axis])
-        high = np.ceil((position[:, axis] + support - origins[axis]) / widths[axis])
-        # Clip to the *grid*, so the cell centres are the real ones; the slab is
-        # accounted for when the row index is turned into a cell index below.
-        lower_bound = low_row if axis == 0 else 0
-        upper_bound = high_row if axis == 0 else len(centres[axis])
-        low = np.clip(low, lower_bound, upper_bound)
-        high = np.clip(high, lower_bound, upper_bound)
-        ranges.append((low.astype(np.intp), high.astype(np.intp)))
-
-    sizes = [high - low for low, high in ranges]
-    block = np.prod(np.stack(sizes), axis=0)
-    picked = np.flatnonzero(block > 0)
-    if not len(picked):
-        return (np.empty(0, dtype=np.intp), np.empty(0), np.empty(0, dtype=np.intp))
-
-    per_particle = block[picked]
-    total = int(per_particle.sum())
-    particle = np.repeat(picked, per_particle)
-    within = np.arange(total, dtype=np.intp) - np.repeat(np.cumsum(per_particle) - per_particle, per_particle)
-
-    offsets = []
-    radix = np.ones(total, dtype=np.intp)
-    for axis in reversed(range(dimensions)):
-        size = sizes[axis][particle]
-        offsets.append((axis, (within // radix) % size))
-        radix = radix * size
-
-    cell = np.zeros(total, dtype=np.intp)
-    distance = np.zeros(total, dtype=float)
-    for axis, offset in offsets:
-        index = ranges[axis][0][particle] + offset
-        if axis == 0:
-            cell += (index - low_row) * strides[axis]
-        else:
-            cell += index * strides[axis]
-        displacement = centres[axis][index] - position[particle, axis]
-        distance += displacement**2
-
-    return cell, distance, particle
-
-
 class _SphModel:
     """A :class:`~.model.BinResultModel` whose queries come back smoothed.
 
@@ -1093,63 +794,3 @@ class _SphModel:
         if isinstance(value, BinResultModel):
             return _SphModel(value, self._render._sibling(value))
         return value
-
-
-@lru_cache(maxsize=1)
-def _native_pair_builder() -> Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] | None:
-    """The compiled pair builder, or ``None`` without the optional extension."""
-    try:
-        from pynbodyext import _native
-    except ImportError:
-        return None
-    builder = getattr(_native, "scatter_pairs", None)
-    return cast("Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] | None", builder)
-
-
-def _kernel_table(kernel: Any) -> np.ndarray:
-    """pynbody's kernel lookup table as float64, for the compiled pair builder.
-
-    Passing the table — rather than a kernel id — keeps the kernel definition on the
-    Python side: the C loop indexes the same numbers pynbody's renderer indexes.
-    """
-    return np.ascontiguousarray(kernel.get_samples(), dtype=float)
-
-
-def _kernel_weights(distance: np.ndarray, smoothing: np.ndarray, kernel: Any) -> np.ndarray:
-    r"""``W(distance, h)`` for a grid of separations and a matching grid of ``h``.
-
-    The kernel is indexed exactly as pynbody's renderer indexes it — its own
-    lookup table, ``index = len(table) * d²/(2h)²``, zero beyond — so a quantile
-    weighs its neighbours with the very weights the kernel sums use, whether the
-    kernel is three-dimensional or the projected one.  (The C kernel in
-    ``cpp/image/scatter.cpp`` does this same indexing.)
-    """
-    # pynbody caches the sample table per kernel and *not* per dtype, and its C
-    # renderer asks for it as float32 — so ask for the same thing it will, or a
-    # later kernel sum trips over a float64 table.
-    samples = np.asarray(kernel.get_samples(), dtype=float)
-    index = ((distance / smoothing) ** 2 / 4.0 * len(samples)).astype(np.intp)
-    inside = index < len(samples)
-    table = samples[np.clip(index, 0, len(samples) - 1)]
-    return np.where(inside, table, 0.0) / smoothing ** int(getattr(kernel, "h_power", 3))
-
-
-def _position_array(sim: Any, axes: dict[str, Any]) -> np.ndarray:
-    """The particle positions, in the axes' own units."""
-    position = sim["pos"]
-    units = getattr(position, "units", None)
-    axis_units = getattr(axes["x"], "units", None)
-    if units is not None and axis_units is not None and units != axis_units:
-        position = position.in_units(axis_units)
-    return np.asarray(position, dtype=float)
-
-
-def _boxsize(sim: Any) -> float | None:
-    """The periodic box, in position units, or ``None`` when there is none."""
-    boxsize = sim.properties.get("boxsize") if hasattr(sim, "properties") else None
-    if boxsize is None:
-        return None
-    position_units = getattr(sim["pos"], "units", None)
-    if position_units is not None and getattr(boxsize, "units", None) is not None:
-        boxsize = boxsize.in_units(position_units, **sim.conversion_context())
-    return float(boxsize)

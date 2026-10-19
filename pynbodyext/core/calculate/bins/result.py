@@ -182,6 +182,30 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
 
     >>> bins["density"].shape_bins
     (3,)
+
+    Implementation
+    --------------
+    This class is a *composition root*: it owns the axis model and forwards to the
+    collaborators that do the work, so a reader looking for behaviour should follow
+    the attribute rather than look for a method here.
+
+    - :attr:`_model` (:class:`~.model.BinResultModel`) — the state every view shares
+    - :attr:`_query_service` (:class:`~.query.BinQueryService`) — the query language,
+      statistics and the per-result cache
+    - :attr:`_geometry` (:class:`~.geometry.BinGeometry`) — edges, centres, widths,
+      per-axis measures
+    - :attr:`_subresults` (:class:`~.subresults.BinSubresultStore`) — family / mask
+      sub-results
+    - :attr:`_measure_resolver` (:class:`~.axes.BinMeasureResolver`) — per-instance
+      measure-type overrides, invalidated through
+      :meth:`_invalidate_measure_dependent_caches`
+    - :attr:`_extensions` (:class:`~.extensions.BinExtensionRegistry`) — the
+      transforms and derived properties this class's queries accept
+
+    The drawing helpers come from :class:`~.plot.BinPlotMixin` and the smoothed
+    queries from :class:`~.sph_render.BinSphRenderMixin`; both are adapters that
+    defer their heavy imports to the call, so importing this module stays free of
+    matplotlib (``tests/test_bins_import_weight.py``).
     """
 
     _SHARED_SCOPES: ClassVar[set[str]] = {"axis", "geometry"}
@@ -207,43 +231,13 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
         scope_signature: Any = None,
         parent: BinNDResult | None = None,
     ) -> None:
-        if model is not None:
-            # Spawn-layer model-ification: the executor builds the model first
-            # and the façade wraps it (bind the owner back-reference here).
-            self._model = model
-            model._owner = self
-            self.sim = model.sim
-            self.source_sim = model.source_sim
-            self._axes = model.axes
-            self.shape_bins = model.shape_bins
-            self.nbins = int(np.prod(self.shape_bins, dtype=int))
-            self.ndim = model.ndim
-            self._bin_data = model.bin_data
-            self._bin_indptr = model.bin_indptr
-            self._particle_bin = model.particle_bin
-            self._valid_mask = model.valid_mask
-            self._calculator = model.calculator
-            self._scope_signature = model.scope_signature
-            self._parent = model.parent.owner if model.parent is not None else None
-        else:
+        if model is None:
+            # Constructed from raw pieces (the nodes' own path).
             assert sim is not None and axes is not None
             assert bin_data is not None and bin_indptr is not None
             assert particle_bin is not None and valid_mask is not None
             assert calculator is not None
-            self.sim = sim
-            self.source_sim = source_sim
-            self._axes = axes
-            self.shape_bins = tuple(axis.nbins for axis in axes)
-            self.nbins = int(np.prod(self.shape_bins, dtype=int))
-            self.ndim = len(axes)
-            self._bin_data = bin_data
-            self._bin_indptr = bin_indptr
-            self._particle_bin = particle_bin
-            self._valid_mask = valid_mask
-            self._calculator = calculator
-            self._scope_signature = scope_signature
-            self._parent = parent
-            self._model = BinResultModel(
+            model = BinResultModel(
                 sim=sim,
                 source_sim=source_sim,
                 axes=axes,
@@ -256,6 +250,27 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
                 parent=parent._model if parent is not None else None,
                 owner=self,
             )
+        else:
+            # Spawn-layer model-ification: the executor builds the model first
+            # and the façade wraps it (bind the owner back-reference here).
+            model._owner = self
+
+        # Every façade attribute comes off the model, so the two construction
+        # paths above cannot drift apart when a field is added.
+        self._model = model
+        self.sim = model.sim
+        self.source_sim = model.source_sim
+        self._axes = model.axes
+        self.shape_bins = model.shape_bins
+        self.nbins = int(np.prod(self.shape_bins, dtype=int))
+        self.ndim = model.ndim
+        self._bin_data = model.bin_data
+        self._bin_indptr = model.bin_indptr
+        self._particle_bin = model.particle_bin
+        self._valid_mask = model.valid_mask
+        self._calculator = model.calculator
+        self._scope_signature = model.scope_signature
+        self._parent = model.parent.owner if model.parent is not None else None
 
         self._diagnostics = BinsResultEngine()
         self._query_service = BinQueryService(self._model, self, self._diagnostics, extensions=type(self)._extensions)
@@ -691,12 +706,7 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
                 return  # no change — nothing to do
             self._measure_resolver.set(alias, type_name)
 
-        # Invalidate measure-dependent cache entries on this instance + subresults
-        n, names = self._query_service.invalidate_measure_dependent_cache()
-        for sub in self._subresults.values():
-            sn, snames = sub._query_service.invalidate_measure_dependent_cache()
-            n += sn
-            names.extend(snames)
+        n, names = self._invalidate_measure_dependent_caches()
 
         if n > 0:
             unique = sorted(set(names))
@@ -707,18 +717,30 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
                 f"{', '.join(unique)}."
             )
 
+    def _invalidate_measure_dependent_caches(self) -> tuple[int, list[str]]:
+        """Drop the cached entries that depend on an axis measure, in this result
+        and in every sub-result below it.
+
+        The measure of an axis names what a bin's weight is (a shell volume, an
+        annulus, the bin width), so a cached density computed under one measure is
+        wrong under another.  Called when the global measure-type table is
+        redefined and when a per-instance override changes; the two used to walk
+        the sub-results separately.
+        """
+        count, names = self._query_service.invalidate_measure_dependent_cache()
+        for sub in self._subresults.values():
+            sub_count, sub_names = sub._query_service.invalidate_measure_dependent_cache()
+            count += sub_count
+            names.extend(sub_names)
+        return count, names
+
     def _on_axis_measure_change(self, alias: str, type_name: str) -> tuple[int, list[str]]:
         """Called by the global subscriber mechanism when a measure type is redefined.
 
         Invalidates measure-dependent cache entries on this instance and all
         subresults.  Returns ``(count, cleared_names)``.
         """
-        n, names = self._query_service.invalidate_measure_dependent_cache()
-        for sub in self._subresults.values():
-            sn, snames = sub._query_service.invalidate_measure_dependent_cache()
-            n += sn
-            names.extend(snames)
-        return n, names
+        return self._invalidate_measure_dependent_caches()
 
     @classmethod
     def register_transform(

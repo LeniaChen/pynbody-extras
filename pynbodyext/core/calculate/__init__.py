@@ -48,14 +48,17 @@ build on top of :class:`RuntimeCalculatorBase`, while
 
 Package Layout
 --------------
-The implementation is organized into six layers:
+The implementation is organized into layers that are also an *import order*: each may
+import from the ones below it, never from above.  :mod:`.interfaces` states the order
+(and holds the seams that keep it acyclic) and ``tests/test_layering_contract.py``
+checks every run-time import against it.
 
 - :mod:`.nodes` contains calculator node authoring primitives and roles:
     :mod:`.nodes.base`, :mod:`.nodes.runtime_base`, :mod:`.nodes.properties`,
     :mod:`.nodes.filters`, :mod:`.nodes.transforms`, :mod:`.nodes.pipeline`,
     and :mod:`.nodes.expr`.
 - :mod:`.params` contains declarative parameter support:
-    :mod:`.params.fields`, :mod:`.params.declarative`, and
+    :mod:`.params.fields` and :mod:`.nodes.declarative`, and
     :mod:`.params.resolution`.
 - :mod:`.runtime` contains execution mechanics:
     :mod:`.runtime.engine`, :mod:`.runtime.context`, :mod:`.runtime.input`,
@@ -193,6 +196,7 @@ from .diagnostics.perf import PerfCollector
 from .diagnostics.trace import TraceCollector, TraceEvent
 from .display import get_repr_style, reset_repr_style, set_repr_style
 from .nodes.base import CalculatorBase, CombinedCalculator
+from .nodes.declarative import dataclass_calc
 from .nodes.expr import ConstantProperty, LambdaProperty, OpProperty
 from .nodes.filters import AndFilter, FilterBase, NotFilter, OrFilter
 from .nodes.pipeline import Pipeline
@@ -200,7 +204,6 @@ from .nodes.properties import PropertyBase
 from .nodes.runtime_base import RuntimeCalculatorBase
 from .nodes.transforms import TransformBase, TransformChain, TransformPlan, TransformStep, chain_transforms
 from .params import DynamicParamSpec, dynamic_value_dependencies, dynamic_value_signature, resolve_dynamic_value
-from .params.declarative import dataclass_calc
 from .params.fields import Param, ParamSpec, ParamView, collect_param_specs
 from .result.enums import (
     BuiltinKinds,

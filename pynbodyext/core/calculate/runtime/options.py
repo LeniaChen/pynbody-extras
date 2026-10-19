@@ -3,13 +3,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from pynbodyext.core.calculate.display import InfoView, display_value
 from pynbodyext.core.calculate.result.enums import ErrorPolicy, RecordPolicy, normalize_error_policy
 
 if TYPE_CHECKING:
     from .progress import ProgressSink
+
+
+class RunOptionKwargs(TypedDict, total=False):
+    """Keyword overrides accepted by ``CalculatorBase.run`` and ``__call__``.
+
+    One name per :class:`RunOptions` field, so a call can override any option
+    without ``run``, ``__call__`` and ``_resolve_run_options`` each listing them
+    again: ``calc.run(sim, perf_memory=True)``.  ``total=False`` because every
+    option is optional; a name passed as ``None`` keeps the value the base options
+    already had.
+
+    ``tests/test_calculate_contract.py`` pins this against :class:`RunOptions`, so
+    the two cannot drift.
+    """
+
+    cache: bool
+    progress: bool | str | ProgressSink | list[ProgressSink] | tuple[ProgressSink, ...] | None
+    perf_time: bool
+    perf_memory: bool
+    observe: bool
+    backend: str
+    default_record_policy: RecordPolicy
+    errors: ErrorPolicy | str
+    cache_small_value_bytes: int
+    auto_record_cached_values: bool
+    auto_record_small_value_bytes: int | None
 
 
 @dataclass(slots=True)

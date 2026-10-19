@@ -59,6 +59,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pynbodyext.core.calculate.display import InfoView, display_value
+from pynbodyext.core.calculate.interfaces import make_node
 from pynbodyext.core.calculate.result.enums import BuiltinKinds, RevertPolicy, normalize_revert_policy
 
 if TYPE_CHECKING:
@@ -128,9 +129,7 @@ class ScopeSpec(InfoView):
             return None
         if len(self.transforms) == 1:
             return self.transforms[0]
-        from pynbodyext.core.calculate.nodes.transforms import chain_transforms
-
-        return chain_transforms(*self.transforms)
+        return make_node("chain_transforms", *self.transforms)
 
     def dependencies(self) -> list[CalculatorBase[Any, Any]]:
         deps: list[CalculatorBase[Any, Any]]
@@ -251,9 +250,7 @@ class Scope(InfoView):
         self, outputs: Mapping[str, CalculatorBase[Any, Any]], *, name: str | None = None
     ) -> CalculatorBase[dict[str, Any], dict[str, Any]]:
         """Build a :class:`Pipeline` and apply this scope to it."""
-        from pynbodyext.core.calculate.nodes.pipeline import Pipeline
-
-        return self.apply(Pipeline(outputs, name=name))
+        return self.apply(make_node("pipeline", outputs, name=name))
 
     def signature(self) -> tuple[Any, ...]:
         """Return the structural signature for this scope object."""
