@@ -46,6 +46,26 @@ def test_node_tree_is_stable() -> None:
     )
 
 
+def test_tree_renderers_share_the_truncation_wording() -> None:
+    """All three trees describe an elided subtree the same way.
+
+    The dependency tree, the node tree and the execution tree each truncate on
+    ``max_depth``; they must agree on both the wording and what counts as a
+    hidden node. The pipeline shares one filter between its two outputs, so the
+    three are expected to count it once.
+    """
+    from pynbodyext.core.calculate.nodes._tree import render_tree
+    from pynbodyext.core.calculate.result.query import ResultQuery
+
+    pipeline = make_pipeline()
+    result = pipeline.run(make_sim())
+    hidden = "... 3 nodes hidden"
+
+    assert hidden in render_tree(pipeline, max_depth=0)
+    assert hidden in ResultQuery.node_tree(result, max_depth=0)
+    assert hidden in ResultQuery.execution_tree(result, max_depth=0)
+
+
 def test_summary_contains_expected_sections() -> None:
     """Summary must keep its measured structure (stable lines) for callers."""
     result = _result()

@@ -15,6 +15,7 @@ import importlib
 import pytest
 
 DOCTYPE_MODULES = (
+    "pynbodyext.core.calculate.bins._weighted_quantiles",
     "pynbodyext.core.calculate.display",
     "pynbodyext.core.calculate.nodes.mixins",
 )

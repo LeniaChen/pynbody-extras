@@ -55,3 +55,28 @@ def make_pipeline(root_name: str = "p") -> Pipeline:
         {"m": MassSum().filter(shared), "t": TempMean().filter(shared)},
         name=root_name,
     )
+
+
+def kind_samples() -> list[object]:
+    """One calculator per node kind the signature encoder can emit.
+
+    Shared by the node-kind dispatch test and the signature round-trip test, so a
+    new kind is added here once and both learn about it.
+    """
+    from pynbodyext.core.calculate import CombinedCalculator, LambdaProperty, TransformChain
+    from pynbodyext.core.calculate.nodes.expr import as_property
+    from pynbodyext.filters import FamilyFilter, Sphere
+    from pynbodyext.transforms import ShiftPosTo, WrapBox
+
+    return [
+        MassSum(),  # dataclass
+        MassSum() * 2,  # op_property
+        MassSum() ** 0,  # constant_property
+        ~(Sphere("30 kpc") & FamilyFilter("star")),  # filter_op
+        MassSum().filter(Sphere("30 kpc")),  # scoped
+        LambdaProperty(lambda sim: 1.0),  # lambda_property
+        as_property(WrapBox()),  # calculator_value_property
+        TransformChain(WrapBox(), ShiftPosTo("ssc")),  # transform_chain
+        CombinedCalculator(MassSum(), MassSum()),  # combined
+        make_pipeline(),  # generic
+    ]
