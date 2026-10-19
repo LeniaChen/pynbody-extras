@@ -229,6 +229,7 @@ from .runtime.input import FilterResult, NodeInput, TransformResult
 from .runtime.options import RunOptions
 from .runtime.progress import NullProgressSink, ProgressSink
 from .runtime.scopes import Scope, ScopeSpec, TransformScope
+from .runtime.sim_identity import id_based_sim_identity, snapshot_identity
 from .store import (
     InMemoryResultStore,
     RecordRef,
@@ -260,6 +261,8 @@ __all__ = [
     "CycleError",
     "ExecutionContext",
     "RunOptions",
+    "snapshot_identity",
+    "id_based_sim_identity",
     "NodeInput",
     "FilterResult",
     "TransformResult",

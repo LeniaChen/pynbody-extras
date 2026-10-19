@@ -48,6 +48,9 @@ __all__ = [
     "signature_type_version",
     "register_signature_type",
     "resolve_signature_type",
+    "SESSION_TAG",
+    "STABLE_TAG",
+    "is_stable_sim_identity",
 ]
 
 
@@ -236,3 +239,23 @@ def resolve_signature_type(name: str) -> Any:
     if registered is not None:
         return registered
     return import_object(name)
+
+
+# ---------------------------------------------------------------------------
+# Simulation identity tags
+# ---------------------------------------------------------------------------
+
+#: First element of a simulation identity that is valid in this process only.
+SESSION_TAG = "session"
+#: First element of a simulation identity that addresses the same data in every session.
+STABLE_TAG = "sim"
+
+
+def is_stable_sim_identity(identity: tuple[Any, ...]) -> bool:
+    """Whether a simulation identity addresses the same data in another session.
+
+    The convention is shared by the runtime (which makes identities, see
+    ``runtime.sim_identity``) and the store (which refuses session-only ones for
+    persistence), so it lives here, below both.
+    """
+    return bool(identity) and identity[0] != SESSION_TAG

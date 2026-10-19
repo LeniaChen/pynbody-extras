@@ -134,11 +134,11 @@ def test_sim_identity_flows_to_provenance() -> None:
 
 
 def test_default_sim_identity_is_id_based() -> None:
-    """The default provider stays id-based so cache semantics are unchanged."""
+    """The default provider stays id-based, tagged as valid in this session only."""
     from pynbodyext.core.calculate.runtime.engine import EvalEngine
 
     sim = make_sim()
-    assert EvalEngine().make_sim_signature(sim) == ("sim", id(sim))
+    assert EvalEngine().make_sim_signature(sim) == ("session", id(sim))
 
 
 def test_signature_cache_key_is_memoized(monkeypatch) -> None:

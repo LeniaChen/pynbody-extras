@@ -117,7 +117,7 @@ def test_a_hash_only_array_is_stable_but_not_constructible() -> None:
 
 def test_the_hash_covers_schema_and_payload_only() -> None:
     sig = make_pipeline().to_signature()
-    identity = {"schema": SIGNATURE_SCHEMA, "payload": sig.payload}
+    identity = {"schema": SIGNATURE_SCHEMA, "payload": sig.identity()}
     expected = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert sig.hash == expected
     assert len(sig.hash) == 64

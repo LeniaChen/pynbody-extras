@@ -136,7 +136,7 @@ def test_store_is_injected_with_identity_from_engine():
     store = InMemoryResultStore(codec=ValueCodec())
     store.store(result, sim_signature=engine.make_sim_signature(sim), calculator_signature=structured)
     assert store.has(sim_signature=("sim", "snapshot_103", "halo_0"), calculator_signature=structured)
-    assert not store.has(sim_signature=("sim", id(sim)), calculator_signature=structured)
+    assert not store.has(sim_signature=("session", id(sim)), calculator_signature=structured)
 
 
 def test_stored_key_is_content_addressed_from_signature():

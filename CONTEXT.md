@@ -33,15 +33,27 @@ Use these terms exactly. Don't drift to synonyms.
   `signature_payload()`; it makes a hand-written (non-dataclass) node
   rebuildable from its signature.
 - **`sim_signature`** — a pluggable address tuple describing *which* simulation
-  object a result belongs to, e.g. `("sim", "snapshot_103", "halo_0")`. Produced
-  by `EvalEngine.make_sim_signature(sim)`.
+  object a result belongs to. Its tag says how far it can be trusted: `("sim",
+  ...)` is stable across sessions, `("session", id(obj))` is valid in this
+  process only (`interfaces.is_stable_sim_identity`). Produced by
+  `EvalEngine.make_sim_signature(sim)`.
 - **`engine.make_sim_signature`** — the stable-identity seam. Default is
-  id-based (`("sim", id(sim))`); a persistence-aware caller injects an address
-  provider for restart-stable identity.
+  id-based (`("session", id(sim))`). `snapshot_identity` is the stable provider
+  for pynbody snapshots: `("sim", <abs path>)`, plus `("halo", <number>,
+  <digest>)` or `("subset", <digest>)` for a sub-snapshot, the digest hashing the
+  particle indices it selects. It falls back to a session identity for a
+  snapshot without a file or with a transformation applied outside the
+  calculator. `calc.run(sim, store=<persistent store>)` uses it by default.
+- **Read-through store** — `calc.run(sim, store=store)` returns the stored
+  result when the key is present (`result.from_store`), and computes and stores
+  it otherwise; `reuse=False` recomputes and replaces. A persistent store is
+  neither read nor written when either half of the key is session-only.
+  In-place array edits are not part of the key.
 - **Content-addressed key** — the composite store identity:
   `(sim_signature, calculator_signature.hash)`, the full 64-character hash. Two
   identical computations derive the same key; a changed calculator or object
-  derives a different one. A hit is checked against the requested payload
+  derives a different one. Numbers compare by value (`CalculatorSignature.identity()`:
+  `30` and `30.0` share a key). A hit is checked against the requested payload
   (`SignatureMismatchError`), and a persistent store refuses an unstable
   signature (`UnstableSignatureError`). `short_hash()` is for display only.
 - **`ResultStore`** (`store/base.py`) — the persistence seam. `store`/`fetch`/
