@@ -8,11 +8,9 @@ centers, widths, and physical measure), the :class:`BinAxisAccessor` used by
 
 from __future__ import annotations
 
-import logging
-import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar, overload
+from typing import Any, overload
 
 import numpy as np
 
@@ -23,44 +21,20 @@ from ._axis_edges import (
     _as_1d_array,
     register_bin_algorithm as register_bin_algorithm,
 )
+from .registries import (
+    AXIS_MEASURE_TYPES,
+    AXIS_MEASURES,
+    AXIS_PROPERTIES,
+    BinDerivedCondition as BinDerivedCondition,
+    BinDerivedFunc as BinDerivedFunc,
+    BinDerivedSpec as BinDerivedSpec,
+    register_axis_measure as _register_axis_measure,
+    register_axis_property as _register_axis_property,
+    register_measure_type as _register_measure_type,
+)
 
 AxisPropertyFunc = Callable[["BinAxis"], Any]
-BinDerivedCondition = Callable[[Any], bool]
-BinDerivedFunc = Callable[[Any], Any]
 
-
-@dataclass(frozen=True)
-class BinDerivedSpec:
-    name: str
-    func: BinDerivedFunc
-    condition: BinDerivedCondition | None = None
-    scope: str = "geometry"
-    #: Whether ``sph_render`` may answer this property.  True means the callback
-    #: is a per-cell function of its inputs (a version of the same callback runs
-    #: against smoothed queries), so the smoothed value means the same thing.
-    allow_sph: bool = False
-
-    def is_available(self, bins: Any) -> bool:
-        return True if self.condition is None else bool(self.condition(bins))
-
-
-
-# --- Axis physical measure registry ---
-# Maps axis alias to callable (BinAxis) -> np.ndarray
-_AXIS_MEASURE_REGISTRY: dict[str, Callable[[BinAxis], np.ndarray]] = {}
-
-# Maps named measure types to callables, decoupled from alias
-_AXIS_MEASURE_TYPE_REGISTRY: dict[str, Callable[[BinAxis], np.ndarray]] = {
-    "spherical_shell": lambda axis: axis.shell_volume,
-    "annulus": lambda axis: axis.annulus_area,
-    "linear": lambda axis: axis.widths,
-}
-
-# Weak set of BinNDResult instances that should be notified when the global
-# axis measure registry changes.  Each subscriber must expose a method
-#  _on_axis_measure_change(alias: str, type_name: str) -> int
-# that invalidates cached entries and returns the number cleared.
-_measure_change_subscribers: weakref.WeakSet = weakref.WeakSet()
 
 
 def axis_matches(axis: BinAxis, names: set[str]) -> bool:
@@ -208,8 +182,6 @@ class BinAxis:
     include_rightmost: bool = True
     units: Any | None = None
 
-    _axis_properties: ClassVar[dict[str, AxisPropertyFunc]] = {}
-
     @overload
     @classmethod
     def register_property(
@@ -249,16 +221,11 @@ class BinAxis:
         # bare @BinAxis.register_property (name is actually the function)
         if callable(name):
             actual_func = name
-            actual_name = actual_func.__name__
-            if not overwrite and actual_name in cls._axis_properties:
-                raise KeyError(f"Axis property {actual_name!r} is already registered.")
-            cls._axis_properties[actual_name] = actual_func
+            _register_axis_property(actual_func.__name__, actual_func, overwrite=overwrite)
             return actual_func
 
         def decorator(property_func: AxisPropertyFunc) -> AxisPropertyFunc:
-            if not overwrite and name in cls._axis_properties:
-                raise KeyError(f"Axis property {name!r} is already registered.")
-            cls._axis_properties[name] = property_func
+            _register_axis_property(name, property_func, overwrite=overwrite)
             return property_func
 
         if func is None:
@@ -322,7 +289,7 @@ class BinAxis:
 
         Resolution order:
 
-        1. :data:`_AXIS_MEASURE_REGISTRY` by ``.alias``
+        1. :data:`~.registries.AXIS_MEASURES` by ``.alias``
         2. Same registry by string ``.prop``
         3. Hardcoded legacy: ``rxy``/``R`` → annulus area, ``r`` → shell volume
         4. Default: bin width ``max − min``
@@ -334,12 +301,12 @@ class BinAxis:
         prop_str = self.prop if isinstance(self.prop, str) else ""
 
         # 1. Registered function for this alias
-        if alias in _AXIS_MEASURE_REGISTRY:
-            return _AXIS_MEASURE_REGISTRY[alias](self)
+        if alias in AXIS_MEASURES:
+            return AXIS_MEASURES[alias](self)
 
         # 2. Registered function for this prop string
-        if prop_str and prop_str in _AXIS_MEASURE_REGISTRY:
-            return _AXIS_MEASURE_REGISTRY[prop_str](self)
+        if prop_str and prop_str in AXIS_MEASURES:
+            return AXIS_MEASURES[prop_str](self)
 
         # 3. Hardcoded legacy fallback
         if alias in {"rxy", "R"} or prop_str in {"rxy", "R"}:
@@ -373,9 +340,7 @@ class BinAxis:
             If ``False`` (default), raise :exc:`KeyError` if *alias* is
             already registered.
         """
-        if not overwrite and alias in _AXIS_MEASURE_REGISTRY:
-            raise KeyError(f"Axis measure for alias {alias!r} is already registered.")
-        _AXIS_MEASURE_REGISTRY[alias] = func
+        _register_axis_measure(alias, func, overwrite=overwrite)
 
     @classmethod
     def register_measure_type(
@@ -403,38 +368,12 @@ class BinAxis:
             If ``False`` (default), raise :exc:`KeyError` if *name* is
             already registered.
         """
-        if not overwrite and name in _AXIS_MEASURE_TYPE_REGISTRY:
-            raise KeyError(f"Measure type {name!r} is already registered.")
-
-        old_func = _AXIS_MEASURE_TYPE_REGISTRY.get(name)
-        _AXIS_MEASURE_TYPE_REGISTRY[name] = func
-
-        # Notify subscribers if the function actually changed
-        if overwrite and old_func is not None and old_func is not func:
-            total_cleared = 0
-            all_cleared: list[str] = []
-            for subscriber in list(_measure_change_subscribers):
-                try:
-                    n, names = subscriber._on_axis_measure_change(name, name)
-                except Exception:
-                    continue
-                total_cleared += n
-                all_cleared.extend(names)
-            if total_cleared > 0:
-                unique = sorted(set(all_cleared))
-                _logger = logging.getLogger("pynbody")
-                _logger.warning(
-                    "Measure type %r redefined (overwrite=True). Cleared %d cached entr%s: %s.",
-                    name,
-                    total_cleared,
-                    "y" if total_cleared == 1 else "ies",
-                    ", ".join(unique),
-                )
+        _register_measure_type(name, func, overwrite=overwrite)
 
     def __getattr__(self, name: str) -> Any:
         # Fallback for dynamically registered axis properties.
         # Only called when normal attribute lookup (fields, @property, methods) fails.
-        prop_func = type(self)._axis_properties.get(name)
+        prop_func = AXIS_PROPERTIES.get(name)
         if prop_func is not None:
             return prop_func(self)
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
@@ -496,7 +435,7 @@ class BinMeasureResolver:
     """Per-instance axis-measure overrides resolved against the global measure registries.
 
     The resolvers checks the per-instance override (keyed by ``axis.alias``,
-    value is a measure-type name from :data:`_AXIS_MEASURE_TYPE_REGISTRY`) first,
+    value is a measure-type name from :data:`~.registries.AXIS_MEASURE_TYPES`) first,
     then falls back to the global :attr:`BinAxis.measure` property.
     """
 
@@ -506,7 +445,7 @@ class BinMeasureResolver:
     def resolve(self, axis: BinAxis) -> np.ndarray:
         type_name = self._overrides.get(axis.alias)
         if type_name is not None:
-            func = _AXIS_MEASURE_TYPE_REGISTRY.get(type_name)
+            func = AXIS_MEASURE_TYPES.get(type_name)
             if func is not None:
                 return func(axis)
         return axis.measure

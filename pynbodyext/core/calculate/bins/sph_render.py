@@ -216,7 +216,7 @@ if TYPE_CHECKING:
     from pynbody.sph.kernels import KernelBase
 
     from .arrays import BinsArray
-    from .axes import BinDerivedSpec
+    from .registries import BinDerivedSpec
     from .result import BinNDResult
 
 __all__ = ["BinSphRenderMixin", "SphRender"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-from .axes import BinDerivedCondition, BinDerivedFunc, BinDerivedSpec
+from .registries import BinDerivedCondition, BinDerivedFunc, BinDerivedSpec
 from .statistics import get_statistic, parse_pipeline_key, register_pipeline_transform
 
 if TYPE_CHECKING:

@@ -28,8 +28,8 @@ from .arrays import BinsArray
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .axes import BinDerivedSpec
     from .model import BinResultModel
+    from .registries import BinDerivedSpec
     from .result import BinNDResult
 
 

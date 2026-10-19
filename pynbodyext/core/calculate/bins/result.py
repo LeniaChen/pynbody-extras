@@ -281,9 +281,9 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
         # Subscribe to global measure-type redefinitions (e.g.
         # BinAxis.register_measure_type(..., overwrite=True)) so that
         # cached density entries are invalidated when a named type changes.
-        from .axes import _measure_change_subscribers
+        from .registries import subscribe_measure_changes
 
-        _measure_change_subscribers.add(self)
+        subscribe_measure_changes(self)
 
     @property
     def root(self) -> BinNDResult:
@@ -692,7 +692,7 @@ class BinNDResult(BinPlotMixin, BinSphRenderMixin):
         >>> bins["measure"].shape_bins
         (3,)
         """
-        from .axes import _AXIS_MEASURE_TYPE_REGISTRY as _types
+        from .registries import AXIS_MEASURE_TYPES as _types
 
         if type_name is None:
             if self._measure_resolver.get(alias) is None:
