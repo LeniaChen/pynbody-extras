@@ -1,16 +1,51 @@
-"""Shared display helpers for calculator objects."""
+"""Shared display layer for calculator objects.
+
+Every notebook-facing object of the calculator framework — calculators, results,
+result nodes and the small value objects — describes *what* it shows once, as a
+:class:`Card`, and a renderer turns that card into markup for the active
+**repr style**:
+
+``rich`` (default)
+    The full card for Jupyter / VS Code: an inlined stylesheet, collapsible
+    ``<details>`` sections, badges and metric grids.
+``simple``
+    Markup that survives GitHub's notebook sanitizer, so a notebook pushed to
+    GitHub shows the same information: only ``<h4>``/``<h5>``/``<p>``/``<table>``/
+    ``<pre>``/``<code>``/``<strong>``/``<br>`` tags, and no attributes at all (no
+    ``class``, no ``style``).  A section that the simple card does not inline is
+    named as the attribute that shows it (``.execution_tree``), so nothing is
+    hidden without a way to reach it.  The ``text/plain`` repr is unchanged.
+
+The card model keeps the two styles from drifting apart: there is one description
+and two renderers, instead of every helper branching on the style.  A renderer for
+another dialect can be added with :func:`register_repr_style`.
+
+Values inside a card are *fragments*: plain values (escaped by the renderer),
+:class:`Code` (monospace) or :class:`Badge` (a status pill in ``rich``, ``<code>``
+in ``simple``), or a tuple of fragments.  No fragment carries pre-rendered HTML,
+which is what lets the simple style guarantee sanitizer-safe output.
+"""
 
 from __future__ import annotations
 
+import warnings
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from functools import lru_cache
 from html import escape
 from importlib import resources
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
 T = TypeVar("T")
+
+
+# ---------------------------------------------------------------------------
+# Stylesheet (rich style only)
+# ---------------------------------------------------------------------------
 
 
 @lru_cache(maxsize=1)
@@ -28,53 +63,99 @@ def card_style() -> str:
     """Return the ``<style>`` block injected into every rich card.
 
     Notebook output has to be self-contained (there is no URL a ``<link>`` could
-    point at, and the GitHub sanitizer strips external stylesheets), so the
-    stylesheet is inlined once per rendered card.
+    point at), so the stylesheet is inlined once per rendered card.
     """
     return f"<style>\n{_card_css()}</style>\n"
 
 
 HTML_STYLE = card_style()
 
-REPR_STYLES: tuple[str, ...] = ("rich", "github", "plain")
-_REPR_STYLE: dict[str, str] = {"style": "rich"}
+
+# ---------------------------------------------------------------------------
+# Repr style
+# ---------------------------------------------------------------------------
+
+DEFAULT_REPR_STYLE = "rich"
+#: Retired style names, mapped to the style that replaced them.
+_STYLE_ALIASES: dict[str, str] = {"github": "simple", "plain": "simple"}
+
+#: The session-wide style, set by :func:`set_repr_style`.  A module global rather
+#: than a context variable: IPython may run each cell in a copied context, so a
+#: context variable set in one cell would not reach the next.
+_GLOBAL_STYLE: dict[str, str] = {"style": DEFAULT_REPR_STYLE}
+#: A temporary override, set by the :func:`repr_style` context manager.
+_STYLE_OVERRIDE: ContextVar[str | None] = ContextVar("pynbodyext_repr_style", default=None)
+
+
+def _canonical_style(style: str) -> str:
+    if style in _STYLE_ALIASES:
+        replacement = _STYLE_ALIASES[style]
+        warnings.warn(
+            f"repr style {style!r} was merged into {replacement!r}; use {replacement!r} instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return replacement
+    if style not in _RENDERERS:
+        raise ValueError(f"unknown repr style {style!r}; expected one of {tuple(_RENDERERS)}")
+    return style
 
 
 def get_repr_style() -> str:
-    """Return the current display style (``"rich"``, ``"github"``, or ``"plain"``)."""
-    return _REPR_STYLE["style"]
+    """Return the active display style (``"rich"`` or ``"simple"``)."""
+    override = _STYLE_OVERRIDE.get()
+    return override if override is not None else _GLOBAL_STYLE["style"]
 
 
 def set_repr_style(style: str) -> None:
-    """Set the global display style used by ``_repr_mimebundle_`` / ``_repr_html_``.
+    """Set the display style used by ``_repr_html_`` / ``_repr_mimebundle_``.
 
     Parameters
     ----------
-    style : {"rich", "github", "plain"}
-        - ``"rich"`` (default): full HTML for Jupyter/VSCode (cards, collapsible
+    style : {"rich", "simple"}
+        - ``"rich"`` (default): full HTML for Jupyter / VS Code (cards, collapsible
           details, badges, metric grids, embedded CSS).
-        - ``"github"``: GitHub-sanitizer-safe HTML (``table``/``pre``/``code``/
-          ``strong``/``p``), no ``<style>``/``<details>``/grid divs, so notebooks
-          render cleanly on GitHub.
-        - ``"plain"``: plain-text only (the HTML mime type is omitted).
+        - ``"simple"``: GitHub-sanitizer-safe HTML (tables, ``<pre>``, ``<code>``,
+          headings; no attributes), so notebooks pushed to GitHub render cleanly.
+
+        The retired names ``"github"`` and ``"plain"`` still work for now and mean
+        ``"simple"``, with a :class:`DeprecationWarning`.
 
     Examples
     --------
-    >>> set_repr_style("github")
+    >>> set_repr_style("simple")
     >>> set_repr_style("rich")
     """
-    if style not in REPR_STYLES:
-        raise ValueError(f"unknown repr style {style!r}; expected one of {REPR_STYLES}")
-    _REPR_STYLE["style"] = style
+    _GLOBAL_STYLE["style"] = _canonical_style(style)
 
 
 def reset_repr_style() -> None:
     """Reset the display style back to the default ``"rich"``."""
-    _REPR_STYLE["style"] = "rich"
+    _GLOBAL_STYLE["style"] = DEFAULT_REPR_STYLE
+
+
+@contextmanager
+def repr_style(style: str) -> Iterator[str]:
+    """Render with *style* inside a ``with`` block, then restore the previous style.
+
+    >>> with repr_style("simple"):
+    ...     get_repr_style()
+    'simple'
+    """
+    token = _STYLE_OVERRIDE.set(_canonical_style(style))
+    try:
+        yield get_repr_style()
+    finally:
+        _STYLE_OVERRIDE.reset(token)
 
 
 def _style() -> str:
-    return _REPR_STYLE["style"]
+    return get_repr_style()
+
+
+# ---------------------------------------------------------------------------
+# Small text helpers
+# ---------------------------------------------------------------------------
 
 
 def compact_repr(value: Any, *, max_length: int = 80) -> str:
@@ -99,224 +180,365 @@ def html_escape(value: Any) -> str:
     return escape(str(value), quote=True)
 
 
-def _html_value(value: Any, *, escape_values: bool) -> str:
-    return html_escape(value) if escape_values else str(value)
+# ---------------------------------------------------------------------------
+# Card model
+# ---------------------------------------------------------------------------
+
+BADGE_TONES = frozenset({"neutral", "info", "ok", "warn", "error"})
 
 
-def _github_value(value: Any, *, escape_values: bool) -> str:
-    """Render a table cell value for the GitHub-safe style.
+@dataclass(frozen=True, slots=True)
+class Badge:
+    """A short status token: a coloured pill in ``rich``, ``<code>`` in ``simple``."""
 
-    Short scalar/token values are wrapped in ``<code>`` (monospace) so they read
-    cleanly on GitHub; longer text is left plain; pre-rendered HTML (``escape_values
-    = False``) is inserted unchanged.
+    text: Any
+    tone: str = "neutral"
+
+
+@dataclass(frozen=True, slots=True)
+class Code:
+    """A value shown in monospace (hashes, expressions, identifiers)."""
+
+    text: Any
+
+
+#: A cell value: a plain value, :class:`Code`, :class:`Badge`, or a tuple of them
+#: (rendered side by side).
+Fragment: TypeAlias = Any
+
+
+@dataclass(frozen=True, slots=True)
+class Fields:
+    """A two-column ``label -> value`` table."""
+
+    rows: Sequence[tuple[str, Fragment]]
+    nowrap: bool = False
+    monospace: bool = False
+    #: Minimum width before the block scrolls horizontally (rich only).
+    min_width: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Table:
+    """A multi-column table with a header row."""
+
+    headers: Sequence[str]
+    rows: Sequence[Sequence[Fragment]]
+    nowrap: bool = False
+    monospace: bool = False
+    min_width: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Metrics:
+    """A row of ``label: value`` counters."""
+
+    items: Sequence[tuple[str, Fragment]]
+    #: One scrolling line (``True``) instead of a wrapping grid (rich only).
+    strip: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Pre:
+    """Preformatted text (trees, reports, tracebacks)."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    """A titled group of blocks.
+
+    ``attr`` names the attribute of the rendered object that shows this section
+    on its own (``"execution_tree"`` for the *Execution tree* section).  A section
+    with an ``attr`` is a *drill-down*: the simple card lists the attribute instead
+    of inlining the content.  A section without one is always inlined.
+
+    ``collapsible`` sections become ``<details>`` in the rich card (``open``
+    controls their initial state); the others are plain titled groups.
     """
-    if not escape_values:
-        return str(value)
-    text = str(value)
-    if len(text) <= 40 and isinstance(value, (str, int, float, bool)):
-        return f"<code>{html_escape(text)}</code>"
-    return html_escape(text)
+
+    title: str
+    blocks: Sequence[Block]
+    attr: str | None = None
+    collapsible: bool = True
+    open: bool = False
 
 
-def html_badge(text: Any, tone: str = "neutral") -> str:
-    """Return a small badge pill."""
-    safe_tone = tone if tone in {"neutral", "info", "ok", "warn", "error"} else "neutral"
-    if _style() != "rich":
-        return f"<code>{html_escape(text)}</code>"
-    return f"<span class='pynbodyext-calc-badge pynbodyext-calc-badge-{safe_tone}'>{html_escape(text)}</span>"
+Block: TypeAlias = Fields | Table | Metrics | Pre | Section
 
 
-def html_table(
-    rows: list[tuple[str, Any]], *, escape_values: bool = True, class_name: str = "pynbodyext-calc-table"
-) -> str:
-    """Return a two-column div grid for the given rows."""
-    if _style() != "rich":
-        body = "".join(
-            f"<tr><th>{html_escape(key)}</th><td>{_github_value(value, escape_values=escape_values)}</td></tr>"
-            for key, value in rows
-        )
-        return f"<table class='{class_name}'><tbody>{body}</tbody></table>"
+@dataclass(frozen=True, slots=True)
+class Card:
+    """What an object shows in a notebook, independent of the repr style."""
 
-    body = "".join(
-        "<div class='pynbodyext-calc-kv-row'>"
-        f"<div class='pynbodyext-calc-kv-key'>{html_escape(key)}</div>"
-        f"<div class='pynbodyext-calc-kv-value'>{_html_value(value, escape_values=escape_values)}</div>"
-        "</div>"
-        for key, value in rows
-    )
-    return f"<div class='{class_name}'>{body}</div>"
+    title: str
+    rows: Sequence[tuple[str, Fragment]] = ()
+    blocks: Sequence[Block] = field(default_factory=tuple)
 
+    def sections(self) -> list[Section]:
+        """Every section of the card, nested ones included, in document order."""
+        out: list[Section] = []
 
-def html_data_table(
-    headers: list[str],
-    rows: list[list[Any]],
-    *,
-    escape_values: bool = True,
-    class_name: str = "pynbodyext-calc-data-table",
-) -> str:
-    """Return a multi-column div grid."""
-    if _style() != "rich":
-        head = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
-        body = "".join(
-            "<tr>" + "".join(f"<td>{_github_value(value, escape_values=escape_values)}</td>" for value in row) + "</tr>"
-            for row in rows
-        )
-        return f"<table class='{class_name}'><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        def walk(blocks: Sequence[Block]) -> None:
+            for block in blocks:
+                if isinstance(block, Section):
+                    out.append(block)
+                    walk(block.blocks)
 
-    if headers:
-        column_template = " ".join("max-content" for _ in headers)
-    else:
-        column_template = "max-content"
+        walk(self.blocks)
+        return out
 
-    header_html = "".join(
-        f"<div class='pynbodyext-calc-data-head-cell'>{html_escape(header)}</div>" for header in headers
-    )
-    body_html = "".join(
-        "<div class='pynbodyext-calc-data-row'>"
-        + "".join(
-            f"<div class='pynbodyext-calc-data-cell'>{_html_value(value, escape_values=escape_values)}</div>"
-            for value in row
-        )
-        + "</div>"
-        for row in rows
-    )
-    return (
-        f"<div class='{class_name}' style='--pynbodyext-calc-columns:{html_escape(column_template)};'>"
-        f"<div class='pynbodyext-calc-data-head'>{header_html}</div>"
-        f"{body_html}"
-        "</div>"
-    )
+    def drilldown_attrs(self) -> tuple[str, ...]:
+        """Attribute names of the drill-down sections, in document order."""
+        return tuple(section.attr for section in self.sections() if section.attr)
+
+    def html(self, style: str | None = None) -> str:
+        """Render the card as HTML in *style* (the active style by default)."""
+        renderer = _RENDERERS[_canonical_style(style) if style is not None else get_repr_style()]
+        return renderer.card(self)
+
+    def mimebundle(self, text: str) -> dict[str, str]:
+        """Return the notebook MIME bundle: *text* plus the card's HTML."""
+        return {"text/plain": text, "text/html": self.html()}
 
 
-def html_scroll_x(body: str, *, min_width: str | None = None) -> str:
-    """Return a horizontal scroll container."""
-    if _style() != "rich":
-        return body
-
-    inner_style = ""
-    if min_width is not None:
-        inner_style = f" style='min-width:{html_escape(min_width)};'"
-
-    return (
-        "<div class='pynbodyext-calc-scroll-x'>"
-        f"<div class='pynbodyext-calc-scroll-x-inner'{inner_style}>{body}</div>"
-        "</div>"
-    )
+# ---------------------------------------------------------------------------
+# Renderers
+# ---------------------------------------------------------------------------
 
 
-def html_metric_grid(metrics: list[tuple[str, Any]], *, escape_values: bool = True) -> str:
-    """Return a compact responsive metric grid."""
-    if _style() != "rich":
-        body = "".join(
-            f"<tr><td>{html_escape(label)}</td><td>{_github_value(value, escape_values=escape_values)}</td></tr>"
-            for label, value in metrics
-        )
+class CardRenderer(Protocol):
+    """Turns a :class:`Card` into one HTML dialect."""
+
+    def card(self, card: Card) -> str: ...
+
+
+class RichRenderer:
+    """Full notebook card: inlined CSS, ``<details>``, badges and grids."""
+
+    css_prefix = "pynbodyext-calc"
+
+    def _cls(self, *names: str) -> str:
+        return " ".join(f"{self.css_prefix}-{name}" for name in names)
+
+    def fragment(self, value: Fragment) -> str:
+        if isinstance(value, Badge):
+            tone = value.tone if value.tone in BADGE_TONES else "neutral"
+            return f"<span class='{self._cls('badge', f'badge-{tone}')}'>{html_escape(value.text)}</span>"
+        if isinstance(value, Code):
+            return f"<code>{html_escape(value.text)}</code>"
+        if isinstance(value, tuple):
+            return " ".join(self.fragment(item) for item in value)
+        return html_escape(value)
+
+    def _scroll(self, body: str, min_width: str | None) -> str:
+        inner_style = f" style='min-width:{html_escape(min_width)};'" if min_width is not None else ""
         return (
-            "<table class='pynbodyext-calc-metric-grid'>"
-            "<thead><tr><th>Metric</th><th>Value</th></tr></thead>"
-            f"<tbody>{body}</tbody></table>"
+            f"<div class='{self._cls('scroll-x')}'>"
+            f"<div class='{self._cls('scroll-x-inner')}'{inner_style}>{body}</div>"
+            "</div>"
         )
 
-    body = "".join(
-        "<div class='pynbodyext-calc-metric'>"
-        f"<div class='pynbodyext-calc-metric-label'>{html_escape(label)}</div>"
-        f"<div class='pynbodyext-calc-metric-value'>{_html_value(value, escape_values=escape_values)}</div>"
-        "</div>"
-        for label, value in metrics
-    )
-    return f"<div class='pynbodyext-calc-metric-grid'>{body}</div>"
-
-
-def html_metric_strip(metrics: list[tuple[str, Any]], *, escape_values: bool = True) -> str:
-    """Return a single-row metric strip intended for horizontal scrolling."""
-    if _style() != "rich":
+    def fields(self, block: Fields, *, scroll: bool = True) -> str:
+        names = ["table"] + (["table-nowrap"] if block.nowrap else []) + (["monospace"] if block.monospace else [])
         body = "".join(
-            f"<tr><td>{html_escape(label)}</td><td>{_github_value(value, escape_values=escape_values)}</td></tr>"
-            for label, value in metrics
+            f"<div class='{self._cls('kv-row')}'>"
+            f"<div class='{self._cls('kv-key')}'>{html_escape(key)}</div>"
+            f"<div class='{self._cls('kv-value')}'>{self.fragment(value)}</div>"
+            "</div>"
+            for key, value in block.rows
         )
+        html = f"<div class='{self._cls(*names)}'>{body}</div>"
+        return self._scroll(html, block.min_width) if scroll and (block.nowrap or block.min_width) else html
+
+    def table(self, block: Table) -> str:
+        names = ["data-table"]
+        names += ["data-table-nowrap"] if block.nowrap else []
+        names += ["monospace"] if block.monospace else []
+        columns = " ".join("max-content" for _ in block.headers) or "max-content"
+        head = "".join(f"<div class='{self._cls('data-head-cell')}'>{html_escape(h)}</div>" for h in block.headers)
+        body = "".join(
+            f"<div class='{self._cls('data-row')}'>"
+            + "".join(f"<div class='{self._cls('data-cell')}'>{self.fragment(value)}</div>" for value in row)
+            + "</div>"
+            for row in block.rows
+        )
+        html = (
+            f"<div class='{self._cls(*names)}' style='--pynbodyext-calc-columns:{html_escape(columns)};'>"
+            f"<div class='{self._cls('data-head')}'>{head}</div>{body}</div>"
+        )
+        return self._scroll(html, block.min_width)
+
+    def metrics(self, block: Metrics) -> str:
+        body = "".join(
+            f"<div class='{self._cls('metric')}'>"
+            f"<div class='{self._cls('metric-label')}'>{html_escape(label)}</div>"
+            f"<div class='{self._cls('metric-value')}'>{self.fragment(value)}</div>"
+            "</div>"
+            for label, value in block.items
+        )
+        if block.strip:
+            return self._scroll(f"<div class='{self._cls('metric-strip')}'>{body}</div>", None)
+        return f"<div class='{self._cls('metric-grid')}'>{body}</div>"
+
+    def pre(self, block: Pre) -> str:
+        return f"<pre class='{self._cls('pre')}'>{html_escape(block.text)}</pre>"
+
+    def section(self, block: Section) -> str:
+        body = self.blocks(block.blocks)
+        if block.collapsible:
+            open_attr = " open" if block.open else ""
+            return (
+                f"<details class='{self._cls('details')}'{open_attr}>"
+                f"<summary>{html_escape(block.title)}</summary>{body}</details>"
+            )
         return (
-            "<table class='pynbodyext-calc-metric-strip'>"
-            "<thead><tr><th>Metric</th><th>Value</th></tr></thead>"
-            f"<tbody>{body}</tbody></table>"
+            f"<div class='{self._cls('section')}'>"
+            f"<div class='{self._cls('section-title')}'>{html_escape(block.title)}</div>{body}</div>"
         )
 
-    body = "".join(
-        "<div class='pynbodyext-calc-metric'>"
-        f"<div class='pynbodyext-calc-metric-label'>{html_escape(label)}</div>"
-        f"<div class='pynbodyext-calc-metric-value'>{_html_value(value, escape_values=escape_values)}</div>"
-        "</div>"
-        for label, value in metrics
-    )
-    return f"<div class='pynbodyext-calc-metric-strip'>{body}</div>"
+    def block(self, block: Block) -> str:
+        if isinstance(block, Fields):
+            return self.fields(block)
+        if isinstance(block, Table):
+            return self.table(block)
+        if isinstance(block, Metrics):
+            return self.metrics(block)
+        if isinstance(block, Pre):
+            return self.pre(block)
+        if isinstance(block, Section):
+            return self.section(block)
+        raise TypeError(f"unsupported card block: {type(block)!r}")
+
+    def blocks(self, blocks: Sequence[Block]) -> str:
+        return "".join(self.block(block) for block in blocks)
+
+    def card(self, card: Card) -> str:
+        rows = self.fields(Fields(card.rows), scroll=False) if card.rows else ""
+        return (
+            f"{HTML_STYLE}"
+            f"<div class='{self._cls('card')}'>"
+            f"<div class='{self._cls('title')}'>{html_escape(card.title)}</div>"
+            f"{rows}{self.blocks(card.blocks)}"
+            "</div>"
+        )
 
 
-def html_section(title: str, body: str) -> str:
-    """Return a titled content section."""
-    if _style() != "rich":
-        return f"<h5>{html_escape(title)}</h5>{body}"
-
-    return (
-        "<div class='pynbodyext-calc-section'>"
-        f"<div class='pynbodyext-calc-section-title'>{html_escape(title)}</div>"
-        f"{body}"
-        "</div>"
-    )
+#: Tags the simple style may emit.  GitHub's notebook renderer sanitizes HTML
+#: output; these tags (with no attributes) pass it unchanged.  Pinned by
+#: ``tests/test_calculate_render.py``.
+SIMPLE_HTML_TAGS = frozenset({"h4", "h5", "p", "br", "strong", "code", "pre", "table", "thead", "tbody", "tr", "th", "td"})
 
 
-def html_details(summary: str, body: str, *, open: bool = False) -> str:
-    """Return a collapsible section."""
-    if _style() != "rich":
-        return f"<h5>{html_escape(summary)}</h5>{body}"
+class SimpleRenderer:
+    """GitHub-sanitizer-safe card: headings, tables, ``<pre>`` and ``<code>`` only.
 
-    open_attr = " open" if open else ""
-    return (
-        f"<details class='pynbodyext-calc-details'{open_attr}><summary>{html_escape(summary)}</summary>{body}</details>"
-    )
+    Emits no attributes and none of ``<style>``, ``<div>``, ``<span>`` or
+    ``<details>``.  Drill-down sections (those with an ``attr``) are listed as
+    attributes under the card instead of being inlined.
+    """
+
+    #: Plain values up to this length are shown as ``<code>`` tokens.
+    code_max_length = 40
+
+    def fragment(self, value: Fragment) -> str:
+        if isinstance(value, (Badge, Code)):
+            return f"<code>{html_escape(value.text)}</code>"
+        if isinstance(value, tuple):
+            return " ".join(self.fragment(item) for item in value)
+        text = str(value)
+        if isinstance(value, (str, int, float, bool)) and len(text) <= self.code_max_length:
+            return f"<code>{html_escape(text)}</code>"
+        return html_escape(text)
+
+    def fields(self, block: Fields) -> str:
+        body = "".join(f"<tr><th>{html_escape(key)}</th><td>{self.fragment(value)}</td></tr>" for key, value in block.rows)
+        return f"<table><tbody>{body}</tbody></table>"
+
+    def table(self, block: Table) -> str:
+        head = "".join(f"<th>{html_escape(header)}</th>" for header in block.headers)
+        body = "".join("<tr>" + "".join(f"<td>{self.fragment(v)}</td>" for v in row) + "</tr>" for row in block.rows)
+        return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+    def metrics(self, block: Metrics) -> str:
+        head = "".join(f"<th>{html_escape(label)}</th>" for label, _ in block.items)
+        body = "".join(f"<td>{self.fragment(value)}</td>" for _, value in block.items)
+        return f"<table><thead><tr>{head}</tr></thead><tbody><tr>{body}</tr></tbody></table>"
+
+    def pre(self, block: Pre) -> str:
+        return f"<pre>{html_escape(block.text)}</pre>"
+
+    def section(self, block: Section) -> str:
+        if block.attr:
+            return ""  # listed under the card as a drill-down attribute
+        return f"<h5>{html_escape(block.title)}</h5>{self.blocks(block.blocks)}"
+
+    def block(self, block: Block) -> str:
+        if isinstance(block, Fields):
+            return self.fields(block)
+        if isinstance(block, Table):
+            return self.table(block)
+        if isinstance(block, Metrics):
+            return self.metrics(block)
+        if isinstance(block, Pre):
+            return self.pre(block)
+        if isinstance(block, Section):
+            return self.section(block)
+        raise TypeError(f"unsupported card block: {type(block)!r}")
+
+    def blocks(self, blocks: Sequence[Block]) -> str:
+        return "".join(self.block(block) for block in blocks)
+
+    def drilldowns(self, card: Card) -> str:
+        attrs = card.drilldown_attrs()
+        if not attrs:
+            return ""
+        names = ", ".join(f"<code>.{html_escape(attr)}</code>" for attr in attrs)
+        return f"<p><strong>Details:</strong> {names}</p>"
+
+    def card(self, card: Card) -> str:
+        rows = self.fields(Fields(card.rows)) if card.rows else ""
+        return f"<h4>{html_escape(card.title)}</h4>{rows}{self.blocks(card.blocks)}{self.drilldowns(card)}"
 
 
-def html_pre(text: str) -> str:
-    """Return an HTML <pre> block with the given text."""
-    if _style() != "rich":
-        return f"<pre>{html_escape(text)}</pre>"
-
-    return f"<pre class='pynbodyext-calc-pre'>{html_escape(text)}</pre>"
+_RENDERERS: dict[str, CardRenderer] = {"rich": RichRenderer(), "simple": SimpleRenderer()}
 
 
-def html_card(
-    title: str, rows: list[tuple[str, Any]], *, body: str = "", html_style: str = HTML_STYLE, escape_values: bool = True
-) -> str:
-    """Return an HTML card with a title, table of rows, and optional body."""
-    table = html_table(rows, escape_values=escape_values) if rows else ""
-    if _style() != "rich":
-        return f"<h4>{html_escape(title)}</h4>{table}{body}"
+def register_repr_style(name: str, renderer: CardRenderer) -> None:
+    """Register (or replace) the renderer behind repr style *name*."""
+    if name in _STYLE_ALIASES:
+        raise ValueError(f"{name!r} is a retired style name and cannot be registered")
+    _RENDERERS[name] = renderer
 
-    return (
-        f"{html_style}"
-        "<div class='pynbodyext-calc-card'>"
-        f"<div class='pynbodyext-calc-title'>{html_escape(title)}</div>"
-        f"{table}"
-        f"{body}"
-        "</div>"
-    )
+
+def repr_styles() -> tuple[str, ...]:
+    """Return the registered repr style names."""
+    return tuple(_RENDERERS)
+
+
+#: Built-in style names (see :func:`repr_styles` for the registered ones).
+REPR_STYLES: tuple[str, ...] = ("rich", "simple")
 
 
 def mimebundle(text: str, html: str) -> dict[str, str]:
     """Return a MIME bundle with plain text and HTML representations."""
-    if _style() == "plain":
-        return {"text/plain": text}
     return {"text/plain": text, "text/html": html}
 
 
+# ---------------------------------------------------------------------------
+# Renderable bases
+# ---------------------------------------------------------------------------
+
+
 class ViewObject:
-    """A sectioned repr view rendered across all display styles.
+    """A sectioned view of a container (named values, warnings, errors).
 
     Subclasses provide ``_summary()`` (compact one-line text) and ``_sections()``
-    (a list of ``(label, body)`` pairs).  The base class turns those into a
-    style-appropriate representation:
-
-    - ``rich``: a full HTML card with collapsible ``<details>`` sections.
-    - ``github`` / ``plain``: the same sections rendered inline (a view exposes
-      its detail directly, so no ''.attr for details'' hint is needed).
+    (a list of ``(label, body)`` pairs of text).  The card shows the summary as
+    its value and every section as preformatted text — collapsible in ``rich``,
+    inlined in ``simple`` (a view exposes its detail directly, so there is no
+    drill-down attribute to name).
     """
 
     def _summary(self) -> str:
@@ -335,32 +557,16 @@ class ViewObject:
     def __str__(self) -> str:
         return self._summary()
 
-    def _repr_html_(self) -> str:
+    def _repr_card(self) -> Card:
         summary = self._summary()
-        sections = self._sections()
-        if _style() == "rich":
-            body_parts = []
-            for label, body in sections:
-                heading = label if label else summary
-                body_parts.append(html_details(heading, html_pre(body), open=False))
-            return html_card(self._title(), [("value", summary)], body="".join(body_parts), escape_values=False)
-        # github / plain: a content view renders its sections directly (no value row,
-        # no per-section heading), so the body is the detail itself.
-        body_parts = []
-        for label, body in sections:
-            if not body:
-                continue
-            if label:
-                body_parts.append(html_section(label, html_pre(body)))
-            else:
-                body_parts.append(html_pre(body))
-        return f"<h4>{html_escape(self._title())}</h4>" + "".join(body_parts)
+        blocks = [Section(label or summary, [Pre(body)]) for label, body in self._sections() if body]
+        return Card(self._title(), [("value", Code(summary))], blocks)
+
+    def _repr_html_(self) -> str:
+        return self._repr_card().html()
 
     def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> dict[str, str]:
-        text = self._summary()
-        if _style() == "plain":
-            return {"text/plain": text}
-        return mimebundle(text, self._repr_html_())
+        return self._repr_card().mimebundle(self._summary())
 
 
 class InfoView:
@@ -368,13 +574,11 @@ class InfoView:
 
     A subclass describes itself once, as ``_display_rows()`` — a list of
     ``(label, value)`` pairs.  The mixin turns those rows into a compact text
-    summary (``__repr__`` / ``__str__``) and into HTML for every style, because
-    :func:`html_card` already picks the dialect (``rich`` cards with a CSS block
-    vs. plain ``<table>`` for GitHub).  Rich and GitHub therefore always show
-    the same fields; only the markup differs.
+    summary (``__repr__`` / ``__str__``) and into a :class:`Card`, so every
+    style shows the same fields; only the markup differs.
 
     Subclasses must define ``_display_rows``; ``_display_title`` and
-    ``_display_body`` have defaults.  Dataclasses must pass ``repr=False`` so
+    ``_display_blocks`` have defaults.  Dataclasses must pass ``repr=False`` so
     the generated ``__repr__`` does not shadow this mixin's summary.
 
     >>> class Point(InfoView):
@@ -396,9 +600,9 @@ class InfoView:
         """Rows of ``(label, value)`` shown in every display style."""
         raise NotImplementedError
 
-    def _display_body(self) -> str:
-        """Optional pre-rendered HTML appended under the rows."""
-        return ""
+    def _display_blocks(self) -> list[Block]:
+        """Optional blocks shown under the rows."""
+        return []
 
     def _display_summary(self) -> str:
         parts = ", ".join(f"{key}={compact_repr(value, max_length=48)}" for key, value in self._display_rows())
@@ -412,11 +616,14 @@ class InfoView:
         # hand-written one-line summary) keeps that text here too.
         return repr(self)
 
+    def _repr_card(self) -> Card:
+        return Card(self._display_title(), self._display_rows(), self._display_blocks())
+
     def _repr_html_(self) -> str:
-        return html_card(self._display_title(), self._display_rows(), body=self._display_body())
+        return self._repr_card().html()
 
     def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> dict[str, str]:
-        return mimebundle(repr(self), self._repr_html_())
+        return self._repr_card().mimebundle(repr(self))
 
 
 class TextReport(str):
@@ -424,9 +631,8 @@ class TextReport(str):
 
     Behaves exactly like :class:`str` — ``print``, slicing, ``in``, equality and
     every existing ``report_*`` caller are unchanged — but remembers a title and
-    renders as an HTML card (``rich``) or ``<h4>`` + ``<pre>`` (``github``).
-    This lets a report method be the single entry point for both the text and
-    the notebook view, instead of adding a parallel ``.view`` attribute.
+    renders as a card holding the text.  This lets a report attribute be the
+    single entry point for both the text and the notebook view.
     """
 
     #: Title of the report (``str.title`` is a method, hence the distinct name).
@@ -440,14 +646,22 @@ class TextReport(str):
     def __repr__(self) -> str:
         return str.__repr__(self)
 
+    def _repr_card(self) -> Card:
+        return Card(self.report_title, blocks=[Pre(str(self))])
+
     def _repr_html_(self) -> str:
-        return html_card(self.report_title, [], body=html_pre(str(self)), escape_values=False)
+        return self._repr_card().html()
 
     def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> dict[str, str]:
-        return mimebundle(str(self), self._repr_html_())
+        return self._repr_card().mimebundle(str(self))
 
     def _repr_pretty_(self, printer: Any, cycle: bool) -> None:
         printer.text(str(self))
+
+
+# ---------------------------------------------------------------------------
+# Units
+# ---------------------------------------------------------------------------
 
 
 def format_time(value: float | None) -> str:
@@ -579,22 +793,29 @@ def tree_lines(
 __all__ = [
     "HTML_STYLE",
     "REPR_STYLES",
+    "SIMPLE_HTML_TAGS",
+    "DEFAULT_REPR_STYLE",
     "get_repr_style",
     "set_repr_style",
     "reset_repr_style",
+    "repr_style",
+    "repr_styles",
+    "register_repr_style",
+    "card_style",
     "compact_repr",
     "display_value",
     "html_escape",
-    "html_badge",
-    "html_table",
-    "html_data_table",
-    "html_scroll_x",
-    "html_metric_grid",
-    "html_metric_strip",
-    "html_section",
-    "html_details",
-    "html_pre",
-    "html_card",
+    "Badge",
+    "Code",
+    "Fields",
+    "Table",
+    "Metrics",
+    "Pre",
+    "Section",
+    "Card",
+    "CardRenderer",
+    "RichRenderer",
+    "SimpleRenderer",
     "mimebundle",
     "ViewObject",
     "InfoView",

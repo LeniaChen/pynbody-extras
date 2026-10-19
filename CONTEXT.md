@@ -33,10 +33,18 @@ Use these terms exactly. Don't drift to synonyms.
 - **tangos** — the Python package this store is modeled on; a relational DB that
   interns name strings. We deliberately diverge (see ADR-0001).
 - **Repr style** — how a calculator object renders in a notebook, set by
-  `display.set_repr_style`: `rich` (cards, `<details>`, badges), `github`
-  (sanitizer-safe `<table>` / `<pre>` / `<h4>`) or `plain` (text only).
+  `display.set_repr_style` (session-wide) or `display.repr_style` (a `with`
+  block): `rich` (cards, `<details>`, badges, inlined CSS) or `simple`
+  (GitHub-sanitizer-safe: `<h4>`/`<h5>`/`<p>`/`<table>`/`<pre>`/`<code>`/
+  `<strong>`/`<br>` only, no attributes — so a notebook pushed to GitHub renders
+  cleanly). `github` and `plain` are retired names for `simple`.
   *Not* a data property: every style shows the same fields, only the markup
   differs.
+- **`Card`** (`display.py`) — the style-neutral description of what an object
+  shows: a title, `label -> value` rows and blocks (`Fields`, `Table`, `Metrics`,
+  `Pre`, `Section`). Values are fragments (plain values, `Code`, `Badge`), never
+  pre-rendered HTML. Objects build a card in `_repr_card()`; one renderer per repr
+  style turns it into markup (`register_repr_style` adds a dialect).
 - **`InfoView`** (`display.py`) — mixin for a value object that renders itself.
   The subclass defines `_display_rows()` once; the mixin derives the compact
   `__repr__` and the per-style HTML. Adopted by `ProvenanceInfo`, `PerfSummary`,
@@ -47,12 +55,14 @@ Use these terms exactly. Don't drift to synonyms.
   `CalculatorBase.dependency_tree`, the `Result.report_*()` builders). It behaves
   like `str` everywhere but also renders as HTML, so one name serves both the
   text and the notebook view.
-- **Section attribute** — the rule tying the two display layers together: every
-  collapsible section of the rich card is reachable as an attribute whose name is
-  the section title in snake_case (``Execution tree`` -> ``.execution_tree``).
-  The `github`/`plain` card lists exactly those names, so a reader drills down by
-  typing an attribute, never by calling a method. Card sections render from the
-  attribute's own rows, so the two cannot drift.
+- **Section attribute** — the rule tying the two display layers together: a
+  *drill-down* section (`Section(attr=...)`) is reachable as an attribute whose
+  name is the section title in snake_case (``Execution tree`` ->
+  ``.execution_tree``). The `simple` card does not inline drill-downs; it lists
+  exactly those names under *Details*, so a reader drills down by typing an
+  attribute, never by calling a method. A section without an `attr` is inlined in
+  every style, so nothing is hidden without a way to reach it. Card sections
+  render from the attribute's own rows, so the two cannot drift.
 - **View-only attribute** — a public attribute that exists only to render
   something already reachable elsewhere. Deliberately avoided: the detail lives
   on the object itself (via `InfoView`) or on the report method (via
@@ -93,7 +103,7 @@ rerun = calculator.run(sim)   # the recipe is fully rebuilt from the text
   (and stays stable across restarts via `engine.make_sim_signature`).
 - [ADR-0002](docs/adr/0002-display-protocol-render-existing-objects.md): display
   comes from the existing objects (`InfoView` rows, `TextReport` methods) rather
-  than parallel view-only attributes, so `rich` and `github` cannot drift apart.
+  than parallel view-only attributes, so `rich` and `simple` cannot drift apart.
 - [ADR-0004](docs/adr/0004-image-layer-takes-plain-2d-arrays.md): the image
   layer (`plot/image/`) takes plain 2-D arrays rather than calculator nodes, so
   any map producer can feed it; `ImageData` is the only place that knows the

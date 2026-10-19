@@ -1,18 +1,16 @@
-"""HTML and text rendering for :class:`Result` and :class:`ResultNode`.
+"""Cards and text summaries for :class:`Result` and :class:`ResultNode`.
 
-:class:`ResultRepr` is a stateless helper that produces human-readable and
-notebook-renderable representations of result objects. All methods are static.
+:class:`ResultRepr` is a stateless helper (static methods only).  The HTML of a
+result object is described once, as a :class:`~pynbodyext.core.calculate.display.Card`
+(``result_card`` / ``result_node_card``); the active repr style turns the card into
+markup, so the ``rich`` and ``simple`` views always carry the same fields.
 
-Long HTML builders are split into focused section helpers:
+Card sections:
 
-- ``_node_value_section``    – stored value / value summary block
-- ``_node_phases_section``   – phase timing table
-- ``_node_observer_section`` – access event counts + field lists
-- ``_node_error_section``    – error / traceback block
-- ``_result_metrics_section``  – top-level metric strip
-- ``_result_named_section``    – named-value table
-- ``_result_provenance_section`` – provenance fold-out
-- ``_result_errors_section``   – errors table
+- node: Value, Phases, Observation, Observation fields, Error, Traceback
+- result: Named values, Warnings, Errors, Provenance, Execution tree, Performance,
+  Cache — each a drill-down named after the attribute that shows it
+  (``result.execution_tree``), which the ``simple`` card lists instead of inlining.
 """
 
 from __future__ import annotations
@@ -20,21 +18,19 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pynbodyext.core.calculate.display import (
-    _style,
+    Badge,
+    Block,
+    Card,
+    Code,
+    Fields,
+    Metrics,
+    Pre,
+    Section,
+    Table,
     compact_repr,
     display_value,
     format_mem,
     format_time,
-    html_badge,
-    html_card,
-    html_data_table,
-    html_details,
-    html_metric_grid,
-    html_metric_strip,
-    html_pre,
-    html_scroll_x,
-    html_section,
-    html_table,
 )
 
 from .query import ResultQuery
@@ -58,6 +54,10 @@ class ResultRepr:
         return "neutral"
 
     @staticmethod
+    def _status_badge(status: Any) -> Badge:
+        return Badge(display_value(status), ResultRepr._tone_for_status(status))
+
+    @staticmethod
     def _short_class_name(path: str | None) -> str:
         if not path:
             return "-"
@@ -73,7 +73,7 @@ class ResultRepr:
         hidden = len(items) - limit
         return f"{', '.join(items[:limit])}, +{hidden}"
 
-    # ── ResultNode repr ────────────────────────────────────────────────────────
+    # ── ResultNode ─────────────────────────────────────────────────────────────
 
     @staticmethod
     def result_node_repr(node: ResultNode) -> str:
@@ -94,11 +94,8 @@ class ResultRepr:
             parts.append(f"observer_events={node.run.observation.event_count}")
         return f"ResultNode({', '.join(parts)})"
 
-    # ── ResultNode HTML section helpers ────────────────────────────────────────
-
     @staticmethod
-    def _node_value_section(node: ResultNode) -> str:
-        """Return the Value fold-out section HTML, or empty string."""
+    def _node_value_blocks(node: ResultNode) -> list[Block]:
         value_rows: list[tuple[str, Any]] = []
         if node.record.value_summary is not None:
             # One source of truth: the summary renders its own rows, so the node
@@ -109,126 +106,86 @@ class ResultRepr:
         if node.record.stored_raw:
             value_rows.append(("raw value", compact_repr(node.record.raw_value, max_length=220)))
         if not value_rows:
-            return ""
-        return html_details(
-            "Value",
-            html_scroll_x(
-                html_table(
-                    value_rows,
-                    class_name="pynbodyext-calc-table pynbodyext-calc-table-nowrap pynbodyext-calc-monospace",
-                ),
-                min_width="56rem",
-            ),
-        )
+            return []
+        return [Section("Value", [Fields(value_rows, nowrap=True, monospace=True, min_width="56rem")])]
 
     @staticmethod
-    def _node_phases_section(node: ResultNode) -> str:
-        """Return the Phases fold-out section HTML, or empty string."""
+    def _node_phase_blocks(node: ResultNode) -> list[Block]:
         if not node.run.phases:
-            return ""
-        phase_rows = [
+            return []
+        rows = [
             [
                 phase.phase,
                 format_time(phase.elapsed_s),
                 format_mem(phase.memory_used),
                 format_mem(phase.memory_peak),
                 format_mem(phase.rss_used),
-                html_badge(phase.status, tone=ResultRepr._tone_for_status(phase.status)),
+                ResultRepr._status_badge(phase.status),
             ]
             for phase in node.run.phases
         ]
-        return html_details(
-            "Phases",
-            html_scroll_x(
-                html_data_table(
-                    ["phase", "time", "mem", "peak", "rss", "status"],
-                    phase_rows,
-                    escape_values=False,
-                    class_name="pynbodyext-calc-data-table pynbodyext-calc-data-table-nowrap pynbodyext-calc-monospace",
-                ),
-                min_width="48rem",
-            ),
+        table = Table(
+            ["phase", "time", "mem", "peak", "rss", "status"], rows, nowrap=True, monospace=True, min_width="48rem"
         )
+        return [Section("Phases", [table])]
 
     @staticmethod
-    def _node_observer_section(node: ResultNode) -> str:
-        """Return Observation count table + fields fold-out HTML, or empty string."""
-        if node.run.observation is None:
-            return ""
-        observation_rows = node.run.observation._display_rows()
-        counts_html = html_details(
-            "Observation",
-            html_scroll_x(
-                html_table(
-                    observation_rows,
-                    class_name="pynbodyext-calc-table pynbodyext-calc-table-nowrap pynbodyext-calc-monospace",
-                ),
-                min_width="42rem",
-            ),
-        )
-
-        observer_lines: list[str] = []
-        if node.run.observation.reads:
-            observer_lines.append(f"reads: {ResultRepr._format_field_set(node.run.observation.reads)}")
-        if node.run.observation.dirty_fields:
-            observer_lines.append(f"dirty: {ResultRepr._format_field_set(node.run.observation.dirty_fields)}")
-        if node.run.observation.deletes:
-            observer_lines.append(f"deletes: {ResultRepr._format_field_set(node.run.observation.deletes)}")
-        fields_html = (
-            html_details("Observation fields", html_pre("\n".join(observer_lines)), open=False)
-            if observer_lines
-            else ""
-        )
-        return counts_html + fields_html
+    def _node_observer_blocks(node: ResultNode) -> list[Block]:
+        observation = node.run.observation
+        if observation is None:
+            return []
+        blocks: list[Block] = [
+            Section(
+                "Observation",
+                [Fields(observation._display_rows(), nowrap=True, monospace=True, min_width="42rem")],
+            )
+        ]
+        lines: list[str] = []
+        if observation.reads:
+            lines.append(f"reads: {ResultRepr._format_field_set(observation.reads)}")
+        if observation.dirty_fields:
+            lines.append(f"dirty: {ResultRepr._format_field_set(observation.dirty_fields)}")
+        if observation.deletes:
+            lines.append(f"deletes: {ResultRepr._format_field_set(observation.deletes)}")
+        if lines:
+            blocks.append(Section("Observation fields", [Pre("\n".join(lines))]))
+        return blocks
 
     @staticmethod
-    def _node_error_section(node: ResultNode) -> str:
-        """Return Error section HTML, or empty string."""
-        if node.run.error is None:
-            return ""
+    def _node_error_blocks(node: ResultNode) -> list[Block]:
         error = node.run.error
-        error_rows = error._display_rows()
-        error_html = html_section(
-            "Error",
-            html_scroll_x(html_table(error_rows, class_name="pynbodyext-calc-table pynbodyext-calc-table-nowrap")),
-        )
+        if error is None:
+            return []
+        blocks: list[Block] = [Section("Error", [Fields(error._display_rows(), nowrap=True)], collapsible=False)]
         if error.traceback_text:
-            error_html += html_details("Traceback", html_pre(error.traceback_text), open=True)
-        return error_html
+            blocks.append(Section("Traceback", [Pre(error.traceback_text)], open=True))
+        return blocks
 
     @staticmethod
-    def result_node_html(node: ResultNode) -> str:
+    def result_node_card(node: ResultNode) -> Card:
+        record = node.record
         rows: list[tuple[str, Any]] = [
             ("label", node.label),
             ("ref", node.ref),
-            ("kind", html_badge(display_value(node.kind), tone="info")),
-            ("status", html_badge(display_value(node.status), tone=ResultRepr._tone_for_status(node.status))),
+            ("kind", Badge(display_value(node.kind), "info")),
+            ("status", ResultRepr._status_badge(node.status)),
             (
                 "stored",
-                " ".join(
-                    [
-                        html_badge(
-                            "value" if node.record.stored_value else "value: no", tone="ok" if node.record.stored_value else "neutral"
-                        ),
-                        html_badge(
-                            "raw" if node.record.stored_raw else "raw: no", tone="ok" if node.record.stored_raw else "neutral"
-                        ),
-                    ]
+                (
+                    Badge("value" if record.stored_value else "value: no", "ok" if record.stored_value else "neutral"),
+                    Badge("raw" if record.stored_raw else "raw: no", "ok" if record.stored_raw else "neutral"),
                 ),
             ),
         ]
-
         if node.class_info.calculator_type is not None:
             rows.append(("calculator", node.class_info.calculator_type))
-
         semantic_class = node.class_info.semantic_calculator_class_path or node.class_info.calculator_class_path
         if semantic_class is not None:
             rows.append(("class", ResultRepr._short_class_name(semantic_class)))
+        if record.policy is not None:
+            rows.append(("record", Badge(display_value(record.policy))))
 
-        if node.record.policy is not None:
-            rows.append(("record", html_badge(display_value(node.record.policy), tone="neutral")))
-
-        metrics_section = html_metric_grid(
+        metrics = Metrics(
             [
                 ("parents", len(node.parent_ids)),
                 ("children", len(node.children)),
@@ -236,18 +193,20 @@ class ResultRepr:
                 ("events", node.run.observation.event_count if node.run.observation is not None else 0),
             ]
         )
+        blocks: list[Block] = [
+            metrics,
+            *ResultRepr._node_value_blocks(node),
+            *ResultRepr._node_phase_blocks(node),
+            *ResultRepr._node_observer_blocks(node),
+            *ResultRepr._node_error_blocks(node),
+        ]
+        return Card("ResultNode", rows, blocks)
 
-        body = (
-            metrics_section
-            + ResultRepr._node_value_section(node)
-            + ResultRepr._node_phases_section(node)
-            + ResultRepr._node_observer_section(node)
-            + ResultRepr._node_error_section(node)
-        )
+    @staticmethod
+    def result_node_html(node: ResultNode) -> str:
+        return ResultRepr.result_node_card(node).html()
 
-        return html_card("ResultNode", rows, body=body, escape_values=False)
-
-    # ── Result repr ────────────────────────────────────────────────────────────
+    # ── Result ─────────────────────────────────────────────────────────────────
 
     @staticmethod
     def result_repr(result: Result[Any]) -> str:
@@ -262,154 +221,99 @@ class ResultRepr:
             parts.append(f"observations={len(result.observations)}")
         return f"Result({', '.join(parts)})"
 
-    # ── Result HTML section helpers ────────────────────────────────────────────
-
     @staticmethod
-    def _result_metrics_section(result: Result[Any]) -> str:
-        """Return the top-level metric strip HTML."""
-        hits = result.perf_summary.cache_hit_count
-        misses = result.perf_summary.cache_miss_count
-        stores = result.perf_summary.cache_store_count
+    def _result_metrics(result: Result[Any]) -> Metrics:
+        perf = result.perf_summary
+        hits, misses = perf.cache_hit_count, perf.cache_miss_count
         cache_total = hits + misses
-        hit_rate = f"{hits / cache_total:.0%}" if cache_total else "-"
-        return html_scroll_x(
-            html_metric_strip(
-                [
-                    ("nodes", len(result.nodes)),
-                    ("phases", result.perf_summary.phase_count),
-                    ("warnings", len(result.warnings)),
-                    ("errors", len(result.errors)),
-                    ("time", format_time(result.perf_summary.total_time_s)),
-                    ("cache", f"{hits} hit / {misses} miss"),
-                    ("hit rate", hit_rate),
-                    ("stores", stores),
-                ]
-            )
+        return Metrics(
+            [
+                ("nodes", len(result.nodes)),
+                ("phases", perf.phase_count),
+                ("warnings", len(result.warnings)),
+                ("errors", len(result.errors)),
+                ("time", format_time(perf.total_time_s)),
+                ("cache", f"{hits} hit / {misses} miss"),
+                ("hit rate", f"{hits / cache_total:.0%}" if cache_total else "-"),
+                ("stores", perf.cache_store_count),
+            ],
+            strip=True,
         )
 
     @staticmethod
-    def _result_named_section(result: Result[Any]) -> str:
-        """Return the Named values section HTML, or empty string."""
-        if not result.named_values:
-            return ""
-        return html_section(
-            "Named values",
-            html_scroll_x(
-                html_table(
-                    result.named_values._display_rows(),
-                    class_name="pynbodyext-calc-table pynbodyext-calc-table-nowrap",
-                )
-            ),
-        )
-
-    @staticmethod
-    def _result_warnings_section(result: Result[Any]) -> str:
-        """Return the Warnings section HTML, or empty string."""
-        if not result.warnings:
-            return ""
-        return html_section(
-            "Warnings",
-            html_scroll_x(
-                html_data_table(
-                    ["#", "message"],
-                    [[index + 1, str(warning)] for index, warning in enumerate(result.warnings)],
-                    class_name="pynbodyext-calc-data-table pynbodyext-calc-data-table-nowrap",
-                )
-            ),
-        )
-
-    @staticmethod
-    def _result_provenance_section(result: Result[Any]) -> str:
-        """Return the Provenance fold-out HTML, or empty string."""
-        if result.provenance is None:
-            return ""
-        return html_details(
-            "Provenance",
-            html_scroll_x(
-                html_table(
-                    result.provenance._display_rows(),
-                    class_name="pynbodyext-calc-table pynbodyext-calc-table-nowrap",
-                )
-            ),
-        )
-
-    @staticmethod
-    def _result_errors_section(result: Result[Any]) -> str:
-        """Return the Errors section HTML, or empty string."""
-        error_rows: list[list[Any]] = []
+    def _result_error_rows(result: Result[Any]) -> list[list[Any]]:
+        rows: list[list[Any]] = []
         for node in ResultQuery.find_error_nodes(result)[:8]:
             if node.run.error is None:
                 continue
-            error_rows.append(
+            rows.append(
                 [
                     ResultQuery.node_label(node, show_ref=True, show_kind=True),
                     node.run.error.phase or "-",
                     f"{node.run.error.error_type}: {node.run.error.message}",
                 ]
             )
-        remaining_slots = max(0, 8 - len(error_rows))
-        for error in result.errors[:remaining_slots]:
-            error_rows.append(["<run>", error.phase or "-", f"{error.error_type}: {error.message}"])
-        if not error_rows:
-            return ""
-        return html_section(
-            "Errors",
-            html_scroll_x(
-                html_data_table(
-                    ["node", "phase", "message"],
-                    error_rows,
-                    class_name="pynbodyext-calc-data-table pynbodyext-calc-data-table-nowrap",
-                )
-            ),
-        )
+        for error in result.errors[: max(0, 8 - len(rows))]:
+            rows.append(["<run>", error.phase or "-", f"{error.error_type}: {error.message}"])
+        return rows
 
     @staticmethod
-    def result_html(result: Result[Any]) -> str:
+    def _result_sections(result: Result[Any]) -> list[Block]:
+        """The drill-down sections, each named after the attribute that shows it."""
+        sections: list[Block] = []
+        if result.named_values:
+            sections.append(
+                Section(
+                    "Named values",
+                    [Fields(result.named_values._display_rows(), nowrap=True)],
+                    attr="named_values",
+                    collapsible=False,
+                )
+            )
+        if result.warnings:
+            rows = [[index + 1, str(warning)] for index, warning in enumerate(result.warnings)]
+            sections.append(
+                Section("Warnings", [Table(["#", "message"], rows, nowrap=True)], attr="warnings", collapsible=False)
+            )
+        error_rows = ResultRepr._result_error_rows(result)
+        if error_rows:
+            sections.append(
+                Section(
+                    "Errors",
+                    [Table(["node", "phase", "message"], error_rows, nowrap=True)],
+                    attr="errors",
+                    collapsible=False,
+                )
+            )
+        if result.provenance is not None:
+            sections.append(
+                Section("Provenance", [Fields(result.provenance._display_rows(), nowrap=True)], attr="provenance")
+            )
+        sections.append(
+            Section("Execution tree", [Pre(result.execution_tree)], attr="execution_tree", open=not result.ok)
+        )
+        for title, attr, report in (("Performance", "performance", result.performance), ("Cache", "cache", result.cache)):
+            text = str(report).strip()
+            if text:
+                sections.append(Section(title, [Pre(text)], attr=attr))
+        return sections
+
+    @staticmethod
+    def result_card(result: Result[Any]) -> Card:
         rows: list[tuple[str, Any]] = [
             ("root", result.root.label),
             ("value", type(result.value).__name__),
-            ("status", html_badge("ok" if result.ok else "error", tone="ok" if result.ok else "error")),
+            ("status", Badge("ok", "ok") if result.ok else Badge("error", "error")),
         ]
         if result.named:
             rows.append(("named", compact_repr(tuple(result.named.keys()), max_length=96)))
         if result.provenance is not None and result.provenance.calculator_signature_hash is not None:
-            rows.append(("signature", result.provenance.calculator_signature_hash[:12]))
-        # Surface the counts the rich metric strip carries, so the collapsed
-        # GitHub card does not hide that a run recorded warnings or errors.
-        if result.warnings:
-            rows.append(("warnings", len(result.warnings)))
-        if result.errors:
-            rows.append(("errors", len(result.errors)))
+            rows.append(("signature", Code(result.provenance.calculator_signature_hash[:12])))
+        return Card("Result", rows, [ResultRepr._result_metrics(result), *ResultRepr._result_sections(result)])
 
-        if _style() != "rich":
-            hint = (
-                "Use .named_values, .warnings, .errors, .provenance, "
-                ".execution_tree, .performance and .cache for details"
-            )
-            return html_card("Result", rows, body=html_pre(hint), escape_values=False)
-
-        execution_tree_html = html_details(
-            "Execution tree", html_pre(result.execution_tree), open=not result.ok
-        )
-
-        perf_text = str(result.performance).strip()
-        perf_html = html_details("Performance", html_pre(perf_text), open=False) if perf_text else ""
-
-        cache_text = str(result.cache).strip()
-        cache_html = html_details("Cache", html_pre(cache_text), open=False) if cache_text else ""
-
-        body = (
-            ResultRepr._result_metrics_section(result)
-            + ResultRepr._result_named_section(result)
-            + ResultRepr._result_warnings_section(result)
-            + ResultRepr._result_errors_section(result)
-            + ResultRepr._result_provenance_section(result)
-            + execution_tree_html
-            + perf_html
-            + cache_html
-        )
-
-        return html_card("Result", rows, body=body, escape_values=False)
+    @staticmethod
+    def result_html(result: Result[Any]) -> str:
+        return ResultRepr.result_card(result).html()
 
     # ── Reports ────────────────────────────────────────────────────────────────
     # The text builders live in ``reports.py``; these keep ``ResultRepr`` the one
