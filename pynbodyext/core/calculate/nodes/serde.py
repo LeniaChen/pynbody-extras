@@ -43,6 +43,18 @@ def _is_transform_base(value: Any) -> bool:
     return isinstance(value, TransformBase)
 
 
+def _is_plain_pipeline(value: Any) -> bool:
+    """Whether *value* is a :class:`Pipeline` built by ``Pipeline.__init__``.
+
+    Only then is ``cls(outputs)`` the way to rebuild it; a subclass with its own
+    constructor is a generic node and describes itself through
+    ``signature_payload``.
+    """
+    from .pipeline import Pipeline
+
+    return isinstance(value, Pipeline) and type(value).__init__ is Pipeline.__init__
+
+
 # ---------------------------------------------------------------------------
 # Encoding
 # ---------------------------------------------------------------------------
@@ -109,7 +121,23 @@ def _encode_special(calculator: Any, path: str, inline_bytes: int) -> _Encoded |
     ts, ts_children = _transform_state(calculator, inline_bytes, path)
     encoded: _Encoded | None = None
 
-    if isinstance(calculator, CombinedCalculator):
+    if _is_plain_pipeline(calculator):
+        # Output names are part of what a pipeline computes (they key its value
+        # dict), so they are identity; the pipeline's own ``name`` is a label and
+        # is not, like every other node's.  Order is kept: it is the order of
+        # the returned dict.
+        outputs = [
+            (key, _Encoder.encode_calculator_value(child, f"{path}.outputs[{key!r}]", inline_bytes))
+            for key, child in calculator.outputs.items()
+        ]
+        pipeline_payload = {
+            "node": "pipeline",
+            "class": class_path(calculator),
+            "outputs": [{"key": key, "value": enc.value} for key, enc in outputs],
+        }
+        encoded = _merge_encoded(pipeline_payload, [enc for _, enc in outputs])
+
+    elif isinstance(calculator, CombinedCalculator):
         items = [
             _Encoder.encode_calculator_value(item, f"{path}.items[{i}]", inline_bytes)
             for i, item in enumerate(calculator.items)
@@ -164,8 +192,10 @@ def _encode_special(calculator: Any, path: str, inline_bytes: int) -> _Encoded |
         )
 
     elif isinstance(calculator, LambdaProperty):
+        # The function is identified by its repr, which carries its address: it
+        # separates two lambdas within a run, but not across sessions.
         payload = {"node": "lambda_property", "class": class_path(calculator), "func_repr": repr(calculator._func)}
-        encoded = _Encoded(payload, constructible=False, paths=(f"{path}.func",))
+        encoded = _Encoded(payload, constructible=False, paths=(f"{path}.func",), unstable=(f"{path}.func",))
 
     return encoded
 
@@ -175,7 +205,10 @@ def _encode_generic(calculator: Any, path: str, inline_bytes: int) -> _Encoded:
     payload_items = calculator.signature_payload()
     children: list[_Encoded] = []
     identity: dict[str, Any] = {}
-    if payload_items is None:
+    opaque = payload_items is None
+    if opaque:
+        # No declared identity: fall back to the object itself, which keeps two
+        # such nodes apart within a run but means nothing in another session.
         identity["opaque_id"] = id(calculator)
     else:
         for key, value in payload_items.items():
@@ -195,13 +228,14 @@ def _encode_generic(calculator: Any, path: str, inline_bytes: int) -> _Encoded:
     if ts is not None:
         payload["transform"] = ts
     merged = _merge_encoded(payload, children)
-    return _Encoded(merged.value, constructible=False, paths=(*merged.paths, path))
+    unstable = (*merged.unstable, path) if opaque else merged.unstable
+    return _Encoded(merged.value, constructible=False, paths=(*merged.paths, path), unstable=unstable)
 
 
 def encode_calculator(
     calculator: Any, *, path: str = "calculator", inline_array_bytes: int = 128
-) -> tuple[Any, bool, tuple[str, ...]]:
-    """Encode *calculator* as ``(payload, constructible, non_constructible_paths)``."""
+) -> tuple[Any, bool, tuple[str, ...], tuple[str, ...]]:
+    """Encode *calculator* as ``(payload, constructible, non_constructible_paths, unstable_paths)``."""
     if not _is_calculator(calculator):
         raise TypeError(f"expected CalculatorBase, got {type(calculator)!r}")
 
@@ -219,7 +253,7 @@ def encode_calculator(
         scope_e = _encode_scope(scope_spec, f"{path}.scope", inline_array_bytes)
         encoded = _merge_encoded({"node": "scoped", "base": encoded.value, "scope": scope_e.value}, [encoded, scope_e])
 
-    return encoded.value, encoded.constructible, encoded.paths
+    return encoded.value, encoded.constructible, encoded.paths, encoded.unstable
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +266,11 @@ def _decode_scoped(payload: dict[str, Any]) -> Any:
     base = _Decoder.decode_value(payload["base"])
     base.scope = _decode_scope(payload["scope"])
     return base
+
+
+def _decode_pipeline(payload: dict[str, Any]) -> Any:
+    cls = import_object(payload["class"])
+    return cls({item["key"]: _Decoder.decode_value(item["value"]) for item in payload["outputs"]})
 
 
 def _decode_combined(payload: dict[str, Any]) -> Any:
@@ -316,6 +355,7 @@ def _decode_dataclass(payload: dict[str, Any]) -> Any:
 
 
 _SPECIAL_DECODERS: dict[str, Any] = {
+    "pipeline": _decode_pipeline,
     "scoped": _decode_scoped,
     "combined": _decode_combined,
     "transform_chain": _decode_transform_chain,

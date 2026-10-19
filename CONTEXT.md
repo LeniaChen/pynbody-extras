@@ -12,7 +12,13 @@ Use these terms exactly. Don't drift to synonyms.
   produces a `ResultNode`; the graph is resolved and executed by `EvalEngine`.
 - **`CalculatorSignature`** (`result/signature.py`) — a frozen, structured
   description of a calculator (class + `deps` + parameters), with a content
-  hash and a JSON text. *Not* a display name.
+  hash (sha256 of schema + payload) and a JSON text. *Not* a display name.
+  Two independent flags: **constructible** (the payload can rebuild the
+  calculator) and **stable** (the hash is the same in every session, so it can
+  key data that outlives the process; false when a part is identified by `id()`
+  or a function repr — `LambdaProperty`, a node without `signature_payload`).
+  A `Pipeline` is identified by its ordered output names and children; its
+  `name`, like every node's, is a label.
 - **`sim_signature`** — a pluggable address tuple describing *which* simulation
   object a result belongs to, e.g. `("sim", "snapshot_103", "halo_0")`. Produced
   by `EvalEngine.make_sim_signature(sim)`.
@@ -20,9 +26,11 @@ Use these terms exactly. Don't drift to synonyms.
   id-based (`("sim", id(sim))`); a persistence-aware caller injects an address
   provider for restart-stable identity.
 - **Content-addressed key** — the composite store identity:
-  `(sim_signature, calculator_signature.short_hash())`. Two identical
-  computations derive the same key; a changed calculator or object derives a
-  different one.
+  `(sim_signature, calculator_signature.hash)`, the full 64-character hash. Two
+  identical computations derive the same key; a changed calculator or object
+  derives a different one. A hit is checked against the requested payload
+  (`SignatureMismatchError`), and a persistent store refuses an unstable
+  signature (`UnstableSignatureError`). `short_hash()` is for display only.
 - **`ResultStore`** (`store/base.py`) — the persistence seam. `store`/`fetch`/
   `get`/`has`/`delete`/`list_refs` over four abstract primitives
   (`_put`, `_get_by_key`, `_delete`, `_list`).

@@ -88,6 +88,7 @@ from __future__ import annotations
 import time
 import traceback
 import uuid
+import warnings
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pynbodyext.core.calculate.diagnostics.observer import observation_phase, render_observer_report
@@ -221,7 +222,17 @@ class EvalEngine:
             calculator_signature = getattr(getattr(ctx, "nodes", None), "root_signature", None)
             if calculator_signature is None:
                 calculator_signature = node.to_signature()
-            store.store(result, sim_signature=ctx.sim_signature, calculator_signature=calculator_signature)
+            if calculator_signature.stable or not getattr(store, "persistent", True):
+                store.store(result, sim_signature=ctx.sim_signature, calculator_signature=calculator_signature)
+            else:
+                # The run itself succeeded; only its key would be meaningless in a
+                # later session, so the result is returned but not persisted.
+                paths = ", ".join(calculator_signature.unstable_paths) or "unknown"
+                warnings.warn(
+                    f"result of {run_label!r} was not stored: its signature is session-specific at {paths}",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         return result
 
@@ -732,7 +743,7 @@ class EvalEngine:
         return ProvenanceInfo(
             calculator_signature=root_signature.cache_key(),
             calculator_signature_text=root_signature.to_json(),
-            calculator_signature_hash=root_signature.short_hash(),
+            calculator_signature_hash=root_signature.hash,
             sim_signature=ctx.sim_signature,
             started_at=started,
             finished_at=finished,

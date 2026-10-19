@@ -679,10 +679,13 @@ def test_both_printers_cover_every_payload_node_type() -> None:
     ``repr(payload)``.  Keep the dispatch tables in sync with the node types the
     signature can carry.
     """
+    from pynbodyext.core.calculate.nodes.serde import _SPECIAL_DECODERS
     from pynbodyext.core.calculate.result.render import SignaturePrinter, TreePrinter
-    from pynbodyext.core.calculate.result.signature import _Decoder
 
     # Decoder-known node types, plus the two non-constructible display-only ones.
-    node_types = set(_Decoder._SPECIAL_DECODERS) | {"dataclass", "lambda_property", "generic"}
+    # (The table lives in ``nodes/serde.py``; ``_Decoder._SPECIAL_DECODERS`` in the
+    # result layer is never filled, which made this check vacuous.)
+    node_types = set(_SPECIAL_DECODERS) | {"dataclass", "lambda_property", "generic"}
+    assert len(node_types) > 3
     assert node_types <= set(SignaturePrinter._CALCULATOR_HANDLERS)
     assert node_types <= set(TreePrinter._CALCULATOR_HEADERS)

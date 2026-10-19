@@ -48,6 +48,18 @@ class TempMean(PropertyBase[float]):
         return float(sim["temp"].mean())
 
 
+class OpaqueProperty(PropertyBase[float]):
+    """A hand-written node with no declared identity (the ``generic`` signature kind).
+
+    Neither a dataclass nor a ``signature_payload`` override, so its signature can
+    only tell it apart from other nodes by the object itself: not constructible,
+    and not stable across sessions.
+    """
+
+    def calculate(self, sim, params=None) -> float:
+        return 0.0
+
+
 def make_pipeline(root_name: str = "p") -> Pipeline:
     """Return a two-output pipeline (``m`` = mass sum, ``t`` = temp mean)."""
     shared = RBelow(5.0)
@@ -78,5 +90,6 @@ def kind_samples() -> list[object]:
         as_property(WrapBox()),  # calculator_value_property
         TransformChain(WrapBox(), ShiftPosTo("ssc")),  # transform_chain
         CombinedCalculator(MassSum(), MassSum()),  # combined
-        make_pipeline(),  # generic
+        make_pipeline(),  # pipeline
+        OpaqueProperty(),  # generic
     ]

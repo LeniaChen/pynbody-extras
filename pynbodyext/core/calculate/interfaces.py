@@ -79,14 +79,14 @@ _NODE_FACTORIES: dict[str, Callable[..., Any]] = {}
 def register_calculator_layer(
     *,
     is_node: Callable[[Any], bool],
-    encode: Callable[..., tuple[Any, bool, tuple[str, ...]]],
+    encode: Callable[..., tuple[Any, bool, tuple[str, ...], tuple[str, ...]]],
     decode: Callable[[dict[str, Any]], Any],
 ) -> None:
     """Install the node layer's three answers about calculators.
 
     ``is_node`` recognises a calculator object, ``encode`` turns one into a
-    ``(payload, constructible, non_constructible_paths)`` triple, and ``decode``
-    rebuilds one from a payload.  ``nodes/serde.py`` calls this at import.
+    ``(payload, constructible, non_constructible_paths, unstable_paths)`` tuple,
+    and ``decode`` rebuilds one from a payload.  ``nodes/serde.py`` calls this at import.
     """
     _CALCULATOR_LAYER.update(is_node=is_node, encode=encode, decode=decode)
 
@@ -99,8 +99,12 @@ def is_calculator_node(value: Any) -> bool:
 
 def encode_calculator_payload(
     calculator: Any, *, path: str = "calculator", inline_array_bytes: int = 128
-) -> tuple[Any, bool, tuple[str, ...]]:
-    """Encode *calculator* into its signature payload, via the node layer."""
+) -> tuple[Any, bool, tuple[str, ...], tuple[str, ...]]:
+    """Encode *calculator* into its signature payload, via the node layer.
+
+    Returns ``(payload, constructible, non_constructible_paths, unstable_paths)``;
+    see :class:`~pynbodyext.core.calculate.result.signature.CalculatorSignature`.
+    """
     encode = _CALCULATOR_LAYER.get("encode")
     if encode is None:
         raise RuntimeError(

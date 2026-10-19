@@ -53,7 +53,11 @@ from pynbodyext.util._type import class_path, import_object
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-SIGNATURE_SCHEMA = "pynbodyext.calculator.signature/v1"
+SIGNATURE_SCHEMA = "pynbodyext.calculator.signature/v2"
+#: Schemas whose payloads this module can still read.  v2 changed what the hash
+#: covers (schema + payload, not the JSON envelope) and added the ``pipeline``
+#: node kind; v1 payloads decode unchanged.
+_READABLE_SCHEMAS = frozenset({"pynbodyext.calculator.signature/v1", SIGNATURE_SCHEMA})
 DEFAULT_INLINE_ARRAY_BYTES = 128
 __all__ = [
     "CalculatorSignature",
@@ -103,14 +107,28 @@ def _freeze_signature_value(value: Any) -> Any:
 class CalculatorSignature:
     """Structured signature for one calculator graph.
 
-    ``payload`` is JSON-compatible and can be hashed or stored. If
-    ``constructible`` is false, the payload can still identify the calculator,
-    but cannot be used to reconstruct it without external data.
+    ``payload`` is JSON-compatible and can be hashed or stored.  Two independent
+    properties describe what the signature is good for:
+
+    ``constructible``
+        The payload can rebuild the calculator (:func:`calculator_from_signature`).
+        False when a part can only be identified, not rebuilt — a large array
+        kept by its content hash, a callable, a custom node without a decoder.
+        ``non_constructible_paths`` names those parts.
+    ``stable``
+        The payload — hence :attr:`hash` — is the same in every Python session
+        for an equal calculator, so it can key data that outlives the process
+        (a persistent result store, a table of galaxies).  False when a part is
+        identified by something session-specific, such as ``id()`` of an object or
+        the ``repr`` of a function; such a signature still separates calculators
+        within one run.  ``unstable_paths`` names those parts.
     """
 
     payload: dict[str, Any]
     constructible: bool = True
     non_constructible_paths: tuple[str, ...] = ()
+    stable: bool = True
+    unstable_paths: tuple[str, ...] = ()
     #: Memoised immutable payload.  ``None`` means "not yet computed"; the frozen
     #: payload is never ``None``.  Excluded from equality/hash so the memo does
     #: not affect signature identity.
@@ -118,8 +136,16 @@ class CalculatorSignature:
 
     @property
     def hash(self) -> str:
-        """Return a stable hash for this signature payload."""
-        return hashlib.sha256(self.to_json().encode("utf-8")).hexdigest()
+        """Return the content hash of this signature: sha256 hex of schema + payload.
+
+        Only what identifies the computation is hashed — the schema version and
+        the payload.  The descriptive flags (``constructible``, ``stable`` and
+        their paths) are derived from the payload and are left out, so they can
+        evolve without moving any key.  Equal for equal calculators in every
+        session when :attr:`stable` is true.
+        """
+        identity = {"schema": SIGNATURE_SCHEMA, "payload": self.payload}
+        return hashlib.sha256(_canonical_payload(identity).encode("utf-8")).hexdigest()
 
     def short_hash(self, *, length: int = 12) -> str:
         return self.hash[:length]
@@ -149,6 +175,10 @@ class CalculatorSignature:
             data["constructible"] = self.constructible
         if full or self.non_constructible_paths:
             data["non_constructible_paths"] = list(self.non_constructible_paths)
+        if full or not self.stable:
+            data["stable"] = self.stable
+        if full or self.unstable_paths:
+            data["unstable_paths"] = list(self.unstable_paths)
         return data
 
     def to_json(self, *, indent: int | None = None, full: bool = False) -> str:
@@ -165,7 +195,7 @@ class CalculatorSignature:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CalculatorSignature:
         schema = data.get("schema")
-        if schema is not None and schema != SIGNATURE_SCHEMA:
+        if schema is not None and schema not in _READABLE_SCHEMAS:
             raise ValueError(f"unsupported calculator signature schema: {data.get('schema')!r}")
         payload = data.get("payload")
         if not isinstance(payload, dict):
@@ -174,6 +204,8 @@ class CalculatorSignature:
             payload=payload,
             constructible=bool(data.get("constructible", True)),
             non_constructible_paths=tuple(str(p) for p in data.get("non_constructible_paths", ())),
+            stable=bool(data.get("stable", True)),
+            unstable_paths=tuple(str(p) for p in data.get("unstable_paths", ())),
         )
 
     @classmethod
@@ -193,7 +225,10 @@ class CalculatorSignature:
 class _Encoded:
     value: Any
     constructible: bool = True
+    #: parts that cannot be rebuilt
     paths: tuple[str, ...] = ()
+    #: parts identified by something session-specific (``id()``, a function repr)
+    unstable: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -203,18 +238,26 @@ class _Encoded:
 
 def _merge_encoded(value: Any, children: list[_Encoded]) -> _Encoded:
     paths: list[str] = []
+    unstable: list[str] = []
     constructible = True
     for child in children:
         if not child.constructible:
             constructible = False
         paths.extend(child.paths)
-    return _Encoded(value=value, constructible=constructible, paths=tuple(paths))
+        unstable.extend(child.unstable)
+    return _Encoded(value=value, constructible=constructible, paths=tuple(paths), unstable=tuple(unstable))
 
 
 def _non_constructible(value: Any, path: str, reason: str, **metadata: Any) -> _Encoded:
+    """Encode a value the signature can neither rebuild nor identify across sessions.
+
+    The value is identified by its ``repr``, which separates two values within
+    one run but is not a durable identity: a function's repr carries its memory
+    address, and an arbitrary object's repr need not reflect its state.
+    """
     payload = {"type": "unsupported", "class": class_path(value), "repr": repr(value), "reason": reason}
     payload.update(metadata)
-    return _Encoded(payload, constructible=False, paths=(path,))
+    return _Encoded(payload, constructible=False, paths=(path,), unstable=(path,))
 
 
 def _canonical_payload(value: Any) -> str:
@@ -306,8 +349,11 @@ class _Encoder:
         try:
             np.save(buf, array, allow_pickle=False)
         except Exception as exc:
+            # No content hash: the payload names only dtype and shape, which does
+            # not tell two such arrays apart.
             base["reason"] = f"array cannot be serialized without pickle: {exc}"
-            return _Encoded(base, constructible=False, paths=(path,))
+            base["repr"] = repr(value)
+            return _Encoded(base, constructible=False, paths=(path,), unstable=(path,))
         data = buf.getvalue()
         base["sha256"] = hashlib.sha256(data).hexdigest()
         if array.nbytes <= inline_bytes:
@@ -320,7 +366,9 @@ class _Encoder:
     @staticmethod
     def encode_calculator_value(value: Any, path: str, inline_bytes: int) -> _Encoded:
         sig = calculator_to_signature(value, inline_array_bytes=inline_bytes, _path=path)
-        return _Encoded(sig.payload, constructible=sig.constructible, paths=sig.non_constructible_paths)
+        return _Encoded(
+            sig.payload, constructible=sig.constructible, paths=sig.non_constructible_paths, unstable=sig.unstable_paths
+        )
 
     @staticmethod
     def encode_value(value: Any, path: str, inline_bytes: int) -> _Encoded:  # noqa: PLR0911
@@ -488,10 +536,16 @@ def calculator_to_signature(
     calculator: Any, *, inline_array_bytes: int = DEFAULT_INLINE_ARRAY_BYTES, _path: str = "calculator"
 ) -> CalculatorSignature:
     """Return a structured signature for a calculator graph."""
-    payload, constructible, paths = encode_calculator_payload(
+    payload, constructible, paths, unstable = encode_calculator_payload(
         calculator, path=_path, inline_array_bytes=inline_array_bytes
     )
-    return CalculatorSignature(payload=payload, constructible=constructible, non_constructible_paths=paths)
+    return CalculatorSignature(
+        payload=payload,
+        constructible=constructible,
+        non_constructible_paths=paths,
+        stable=not unstable,
+        unstable_paths=unstable,
+    )
 
 
 def calculator_from_signature(signature: CalculatorSignature | dict[str, Any] | str) -> Any:

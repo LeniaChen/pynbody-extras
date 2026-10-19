@@ -11,9 +11,14 @@ The signature system is the source of the identity:
 - ``sim_signature`` — a pluggable address tuple (see
   :mod:`~pynbodyext.core.calculate.runtime.sim_identity`), e.g. ``("sim",
   "/path/snap_103", "halo_0")``.
-- ``calculator_signature`` — a :class:`CalculatorSignature` whose short hash
-  identifies the calculator independently of its textual representation, and
-  whose JSON text allows reconstruction.
+- ``calculator_signature`` — a :class:`CalculatorSignature` whose full sha256
+  :attr:`~CalculatorSignature.hash` identifies the calculator independently of
+  its textual representation, and whose JSON text allows reconstruction.
+
+A record found under a hash is checked against the requested signature before it
+is returned, and a persistent store refuses a signature that is not
+:attr:`~CalculatorSignature.stable` (one identified by ``id()`` or a function
+repr), whose key would mean nothing in the next session.
 
 :class:`ResultStore` is deliberately an abstract template: it implements the
 high-level :meth:`ResultStore.store`, :meth:`ResultStore.fetch`,
@@ -30,7 +35,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pynbodyext.core.calculate.result.signature import CalculatorSignature, calculator_from_signature
 
@@ -41,6 +46,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "RESULT_STORE_SCHEMA",
+    "UnstableSignatureError",
+    "SignatureMismatchError",
     "RecordRef",
     "ResultRecord",
     "ResultStore",
@@ -48,8 +55,17 @@ __all__ = [
     "compute_calculator_key",
 ]
 
-#: Discriminator for records produced by this store version.
-RESULT_STORE_SCHEMA = "pynbodyext.result.store/v1"
+#: Discriminator for records produced by this store version.  v2 keys records on
+#: the full sha256 signature hash (v1 used its first 12 characters).
+RESULT_STORE_SCHEMA = "pynbodyext.result.store/v2"
+
+
+class UnstableSignatureError(ValueError):
+    """A persistent store was asked to key a record on a session-specific signature."""
+
+
+class SignatureMismatchError(RuntimeError):
+    """The record stored under a hash describes a different calculator than requested."""
 
 
 def _sig_text(sig: tuple[Any, ...]) -> str:
@@ -88,12 +104,31 @@ def _json_object_hook(data: dict[str, Any]) -> Any:
 
 
 def compute_calculator_key(signature: CalculatorSignature) -> tuple[str, str]:
-    """Return ``(short_hash, json_text)`` for a structured signature.
+    """Return ``(hash, json_text)`` for a structured signature.
 
-    The short hash is the content-addressed identity used as the lookup key; the
-    full JSON is retained so a loaded store entry can reconstruct the calculator.
+    The full sha256 hash is the content-addressed identity used as the lookup key;
+    the JSON is retained so a loaded store entry can reconstruct the calculator,
+    and so a hit can be checked against the signature that asked for it.
     """
-    return (signature.short_hash(), signature.to_json())
+    return (signature.hash, signature.to_json())
+
+
+def _check_record(record: ResultRecord | None, signature: CalculatorSignature) -> ResultRecord | None:
+    """Return *record* if it was stored for *signature*; raise if it was not.
+
+    Keys are content hashes, so a different payload under the same key means a
+    collision or a corrupted row.  Either way the stored value answers another
+    question, and returning it would be a silent wrong result.
+    """
+    if record is None or not record.calculator_signature_text:
+        return record
+    stored = CalculatorSignature.from_json(record.calculator_signature_text)
+    if stored.payload != signature.payload:
+        raise SignatureMismatchError(
+            f"record {record.calculator_signature_hash[:12]}... was stored for {stored.pretty()!r}, "
+            f"not for {signature.pretty()!r}"
+        )
+    return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,8 +348,12 @@ class ResultStore(ABC):
 
     Concrete adapters only implement ``_put``, ``_get_by_key``, ``_delete``, and
     ``_list``; everything else (encoding a :class:`Result`, decoding it back,
-    deriving the content-addressed key) is shared here.
+    deriving the content-addressed key, checking a hit) is shared here.
     """
+
+    #: Whether records outlive the Python process.  A persistent store refuses
+    #: calculator signatures that are not stable across sessions.
+    persistent: ClassVar[bool] = True
 
     def __init__(self, codec: ValueCodec | None = None) -> None:
         self.codec = codec or ValueCodec()
@@ -331,7 +370,21 @@ class ResultStore(ABC):
         calculator_signature: CalculatorSignature,
         pretty_key: str | None = None,
     ) -> RecordRef:
-        """Persist a result under the given simulation + calculator identity."""
+        """Persist a result under the given simulation + calculator identity.
+
+        Raises
+        ------
+        UnstableSignatureError
+            If the store is :attr:`persistent` and the signature is not
+            :attr:`~CalculatorSignature.stable`.
+        """
+        if self.persistent and not calculator_signature.stable:
+            paths = ", ".join(calculator_signature.unstable_paths) or "unknown"
+            raise UnstableSignatureError(
+                f"cannot persist a result keyed on a session-specific signature ({calculator_signature.pretty()}); "
+                f"identified only within this session at: {paths}. Give the calculator a stable identity "
+                "(dataclass parameters or signature_payload()) instead of a lambda or an opaque object."
+            )
         record = ResultRecord.from_result(
             result,
             sim_signature=sim_signature,
@@ -350,14 +403,13 @@ class ResultStore(ABC):
 
     def get(self, *, sim_signature: tuple[Any, ...], calculator_signature: CalculatorSignature) -> Result | None:
         """Return the stored result for an identity, or ``None`` on a miss."""
-        hash_, _text = compute_calculator_key(calculator_signature)
-        record = self._get_by_key(tuple(sim_signature), hash_)
+        record = _check_record(self._get_by_key(tuple(sim_signature), calculator_signature.hash), calculator_signature)
         return None if record is None else record.to_result(self.codec)
 
     def has(self, *, sim_signature: tuple[Any, ...], calculator_signature: CalculatorSignature) -> bool:
         """Whether a result already exists for an identity."""
-        hash_, _text = compute_calculator_key(calculator_signature)
-        return self._get_by_key(tuple(sim_signature), hash_) is not None
+        record = self._get_by_key(tuple(sim_signature), calculator_signature.hash)
+        return _check_record(record, calculator_signature) is not None
 
     def delete(self, ref: RecordRef) -> bool:
         """Delete a stored result; return whether it existed."""
@@ -392,7 +444,7 @@ class ResultStore(ABC):
             no record exists for the identity.
         """
         signature = CalculatorSignature.from_json(calculator_signature_text)
-        record = self._get_by_key(tuple(sim_signature), signature.short_hash())
+        record = _check_record(self._get_by_key(tuple(sim_signature), signature.hash), signature)
         return None if record is None else record.to_result(self.codec)
 
     # ------------------------------------------------------------------
@@ -413,7 +465,12 @@ class ResultStore(ABC):
 
 
 class InMemoryResultStore(ResultStore):
-    """Reference :class:`ResultStore` adapter backed by ``dict``."""
+    """Reference :class:`ResultStore` adapter backed by ``dict``.
+
+    Lives as long as the process, so it accepts session-specific signatures too.
+    """
+
+    persistent: ClassVar[bool] = False
 
     def __init__(self, codec: ValueCodec | None = None) -> None:
         super().__init__(codec)
