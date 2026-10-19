@@ -529,28 +529,26 @@ def test_a_quantile_then_a_kernel_sum_still_works() -> None:
 
 def test_the_compiled_pair_builder_matches_the_numpy_one() -> None:
     """The C++ kernel is an optimisation of the fallback, not a second definition."""
-    from pynbodyext.core.calculate.bins.sph_render import (
-        _kernel_table,
-        _kernel_weights,
-        _native_pair_builder,
-        _scatter_pairs,
+    from pynbodyext.core.calculate.bins._sph_geometry import images, slab_grid
+    from pynbodyext.core.calculate.bins._sph_scatter import (
+        kernel_table,
+        kernel_weights,
+        native_pair_builder,
+        scatter_pairs,
     )
 
-    builder = _native_pair_builder()
+    builder = native_pair_builder()
     if builder is None:
         pytest.skip("the optional C++ extension is not built")
     sim = make_sim(4000, h=0.5)
     bins = make_bins(sim)
     render = SphRender(bins)
     plan = render._layout()
-    particle, shift = render._images(plan)
+    particle, shift = images(plan, render._smoothing(plan["smooth"]))
     position = plan["position"][particle][:, [0, 1]] + shift
     smoothing = render._smoothing(plan["smooth"])[particle]
     support = 2.0 * smoothing
-    centres = [np.asarray(plan["axes"][prop].edges[:-1] + plan["axes"][prop].edges[1:]) / 2 for prop in plan["present"]]
-    origins = [float(plan["axes"][prop].edges[0]) for prop in plan["present"]]
-    widths = [plan["widths"][prop] for prop in plan["present"]]
-    strides = [NBINS, 1]
+    grid = slab_grid(plan)
     kernel = render._kernel(projected=True)
     measure = plan["measure"]
     rng = np.random.default_rng(3)
@@ -563,22 +561,22 @@ def test_the_compiled_pair_builder_matches_the_numpy_one() -> None:
         np.ascontiguousarray(support),
         np.ascontiguousarray(value),
         np.ascontiguousarray(extra),
-        _kernel_table(kernel),
+        kernel_table(kernel),
         int(getattr(kernel, "h_power", 3)),
         float(measure),
-        origins,
-        widths,
-        [NBINS, NBINS],
-        strides,
+        list(grid.origins),
+        list(grid.widths),
+        [len(centre) for centre in grid.centres],
+        list(grid.strides),
         0,
         NBINS,
         0,
     )
-    cell, distance, found = _scatter_pairs(position, smoothing, support, centres, origins, widths, strides, 0, NBINS)
+    cell, distance, found = scatter_pairs(position, smoothing, support, grid, 0, NBINS)
     fallback = (
         cell,
         value[found],
-        _kernel_weights(np.sqrt(distance), smoothing[found], kernel) * measure * extra[found],
+        kernel_weights(np.sqrt(distance), smoothing[found], kernel) * measure * extra[found],
     )
 
     assert len(native[0]) == len(fallback[0]) > 0
@@ -594,13 +592,13 @@ def test_the_compiled_pair_builder_matches_the_numpy_one() -> None:
 
 def test_the_numpy_fallback_answers_the_same_quantile(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without the optional extension the NumPy path still answers the same query."""
-    import pynbodyext.core.calculate.bins.sph_render as module
+    import pynbodyext.core.calculate.bins._sph_scatter as scatter
 
     sim = make_sim(3000, h=0.5)
     bins = make_bins(sim)
     native = np.asarray(SphRender(bins)["vz.median"])
 
-    monkeypatch.setattr(module, "_native_pair_builder", lambda: None)
+    monkeypatch.setattr(scatter, "native_pair_builder", lambda: None)
     fallback = np.asarray(SphRender(bins)["vz.median"])
 
     assert np.isfinite(fallback).sum() == np.isfinite(native).sum() > 0
@@ -829,7 +827,9 @@ def test_the_wrapping_offsets_are_pynbody_s_own() -> None:
     axis = plan["axes"]["x"]
     expected = ImageRenderer(sim)._calculate_wrapping_repeat_array(float(axis.edges[0]), float(axis.edges[-1]))
 
-    np.testing.assert_allclose(render._wrap_offsets(axis, plan["boxsize"]), expected)
+    from pynbodyext.core.calculate.bins._sph_geometry import wrap_offsets
+
+    np.testing.assert_allclose(wrap_offsets(axis, plan["boxsize"]), expected)
 
 
 def make_periodic_sim(boxsize: float, *, span: float = 1000.0, h: float = 20.0, count: int = 1):
