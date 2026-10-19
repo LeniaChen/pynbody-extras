@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TypeAlias, Union
 from numpy.typing import ArrayLike
 from pynbody.units import UnitBase
 
-from pynbodyext.util._type import UnitLike
+from pynbodyext.util._type import UnitLike, annotation_names
 
 if TYPE_CHECKING:
     from matplotlib.collections import PathCollection, QuadMesh
@@ -54,10 +54,13 @@ Artist: TypeAlias = Union["AxesImage", "QuadMesh", "ContourSet", "PathCollection
 def annotation_namespace() -> dict[str, object]:
     """Every name the layer's annotations use, resolved to the object it means.
 
-    Importing this imports what the annotations name — matplotlib's artist classes
-    and the calculator's binned-result types — which is exactly what the layer
-    defers until you draw or bin.  A consumer that wants the hints pays that cost
-    here; see :func:`resolve_type_hints`.
+    Importing this imports what the annotations name — matplotlib's artist classes,
+    which is exactly what the layer defers until you draw.  The binned-result types
+    the layer's annotations also mention are *not* imported here: the binning layer
+    registers those names through
+    :func:`pynbodyext.util._type.register_annotation_names`, so this module keeps no
+    dependency on the calculator layer (ADR-0004).  A consumer that wants the hints
+    pays the import cost here; see :func:`resolve_type_hints`.
 
     Returns
     -------
@@ -76,10 +79,6 @@ def annotation_namespace() -> dict[str, object]:
     from matplotlib.typing import ColorType
     from mpl_toolkits.axes_grid1.axes_divider import AxesDivider
 
-    from pynbodyext.core.calculate.bins.arrays import BinsArray
-    from pynbodyext.core.calculate.bins.axes import BinAxis
-    from pynbodyext.core.calculate.bins.result import BinNDResult
-
     from .adaptive import AdaptiveMap, AdaptiveOps
     from .compose import ComposeOps, MapStyle
     from .data import ImageData
@@ -97,9 +96,6 @@ def annotation_namespace() -> dict[str, object]:
         "Axes": Axes,
         "AxesDivider": AxesDivider,
         "AxesImage": AxesImage,
-        "BinAxis": BinAxis,
-        "BinNDResult": BinNDResult,
-        "BinsArray": BinsArray,
         "Callable": Callable,
         "ColorType": ColorType,
         "Colorbar": Colorbar,
@@ -126,6 +122,7 @@ def annotation_namespace() -> dict[str, object]:
         "SmoothOps": SmoothOps,
         "UnitLike": UnitLike,
     }
+    namespace.update(annotation_names())
     return namespace
 
 
