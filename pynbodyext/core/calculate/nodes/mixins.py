@@ -150,11 +150,23 @@ class _CalculatorSignatureMixin(_CalculatorContract):
         Non-dataclass custom calculators should override it when their behavior
         depends on constructor state beyond declared dependencies.
 
+        To make such a node rebuildable from its signature as well, define the
+        inverse as a classmethod, ``from_signature_payload(cls, payload)``, which
+        receives this mapping (values decoded) and returns an equal calculator::
+
+            def signature_payload(self):
+                return {"hot_mass": self.hot_mass, "total_mass": self.total_mass}
+
+            @classmethod
+            def from_signature_payload(cls, payload):
+                return cls(payload["hot_mass"], payload["total_mass"])
+
         Returns
         -------
         Mapping[str, Any] | None
             A JSON-encodable-or-encodable-by-signature mapping describing this
-            calculator's identity state, or None to fall back to opaque identity.
+            calculator's identity state, or None to fall back to opaque identity
+            (which is neither rebuildable nor stable across sessions).
         """
         return None
 

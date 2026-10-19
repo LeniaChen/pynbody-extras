@@ -30,6 +30,8 @@ class ShiftPosTo(TransformBase[GenericTranslation]):
         Whether to move all particles or only a subset.
     """
 
+    signature_name = "pynbodyext.transforms.ShiftPosTo"
+
     mode: Param[SimNpArray | str] = Param(default="ssc", field_name="pos")
 
     def __post_init__(self) -> None:
@@ -65,6 +67,8 @@ class ShiftVelTo(TransformBase[GenericTranslation]):
         Whether to move all particles or only a subset.
 
     """
+
+    signature_name = "pynbodyext.transforms.ShiftVelTo"
 
     mode: Param[SimNpArray | str] = Param(default="com", field_name="vel")
 

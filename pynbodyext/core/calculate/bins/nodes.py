@@ -267,6 +267,8 @@ class Bin1D(_BinNodeBase):
     >>> bins = Bin1D("r", vmin=0, vmax="30 kpc", nbins=10)(sim)
     """
 
+    signature_name = "pynbodyext.core.calculate.Bin1D"
+
     prop: Param[Any]
     vmin: Param[float | UnitLike | None] = Param(default=None)
     vmax: Param[float | UnitLike | None] = Param(default=None)
@@ -323,6 +325,8 @@ class BinND(_BinNodeBase):
     >>> result.shape_bins
     (3, 3)
     """
+
+    signature_name = "pynbodyext.core.calculate.BinND"
 
     axes_specs: tuple[Bin1D, ...]
 

@@ -23,6 +23,8 @@ class AlignVec(TransformBase[Rotation]):
 
     """
 
+    signature_name = "pynbodyext.transforms.AlignVec"
+
     vector: Param[np.ndarray]
     up: np.ndarray | None = None
 

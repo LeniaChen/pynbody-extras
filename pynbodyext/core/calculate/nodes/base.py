@@ -105,6 +105,7 @@ from typing import (
     overload,
 )
 
+from pynbodyext.core.calculate.interfaces import register_signature_type
 from pynbodyext.core.calculate.nodes.mixins import (
     _CalculatorComposeMixin,
     _CalculatorDisplayMixin,
@@ -190,6 +191,22 @@ class CalculatorBase(
     #: design — a transform that is deliberately a no-op, say — where the warning
     #: would be noise about a supported state.
     warns_on_empty_input: ClassVar[bool] = True
+
+    #: The stable name this class has in signature payloads — conventionally its
+    #: public import path (``"pynbodyext.filters.Sphere"``), so moving the defining
+    #: module does not change any stored key.  ``None`` means the class path.
+    #: Read from the class itself only: a subclass is a different calculator.
+    signature_name: ClassVar[str | None] = None
+    #: Earlier names of this class, still resolved when an old payload is read.
+    signature_aliases: ClassVar[tuple[str, ...]] = ()
+    #: Bump when what the calculator computes changes for the same parameters;
+    #: the version is part of the signature, so stored results stop matching.
+    #: Read from the class itself only, like :attr:`signature_name`.
+    signature_version: ClassVar[int] = 0
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        register_signature_type(cls)
 
     @overload
     @classmethod

@@ -143,6 +143,8 @@ class ConstantProperty(PropertyBase[TValue]):
 class LambdaProperty(PropertyBase[TValue]):
     """Property expression backed by a callable ``func(sim)``."""
 
+    signature_name = "pynbodyext.core.calculate.LambdaProperty"
+
     node_kind = BuiltinKinds.PROPERTY
 
     def __init__(self, func: Callable[[Any], TValue], *, name: str | None = None) -> None:

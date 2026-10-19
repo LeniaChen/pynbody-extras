@@ -116,6 +116,8 @@ class Pipeline(CalculatorBase[dict[str, Any], dict[str, Any]]):
         Optional name for the pipeline root node.
     """
 
+    signature_name = "pynbodyext.core.calculate.Pipeline"
+
     node_kind = BuiltinKinds.COMBINED
 
     def __init__(self, outputs: Mapping[str, CalculatorBase[Any, Any]], *, name: str | None = None) -> None:

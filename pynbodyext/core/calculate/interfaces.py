@@ -17,6 +17,11 @@ an import:
   calculator from a payload; wrap transforms in a chain) — that is a registration
   hook, filled in by the layer that owns the classes.
 
+It also holds the **signature type names**: the stable name a calculator class is
+identified by in a signature payload (see :func:`signature_type_name`), registered
+by ``CalculatorBase.__init_subclass__`` and resolved back to the class by every
+layer that reads payloads.
+
 Nothing here imports a sibling module, which is the property that makes it usable
 from every layer.  ``tests/test_layering_contract.py`` holds the rule.
 """
@@ -24,6 +29,8 @@ from every layer.  ``tests/test_layering_contract.py`` holds the rule.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+from pynbodyext.util._type import class_path, import_object
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -37,6 +44,10 @@ __all__ = [
     "decode_calculator_payload",
     "register_node_factory",
     "make_node",
+    "signature_type_name",
+    "signature_type_version",
+    "register_signature_type",
+    "resolve_signature_type",
 ]
 
 
@@ -142,3 +153,86 @@ def make_node(kind: str, *args: Any, **kwargs: Any) -> Any:
     if factory is None:
         raise RuntimeError(f"no node factory registered as {kind!r}")
     return factory(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Signature type names
+# ---------------------------------------------------------------------------
+
+#: Declared signature names and aliases -> the class they identify.
+_SIGNATURE_TYPES: dict[str, type] = {}
+
+
+def _own(cls: type, attribute: str, default: Any) -> Any:
+    """Return *attribute* as declared on *cls* itself, ignoring its bases.
+
+    Type identity is not inherited: a subclass of ``Sphere`` is a different
+    calculator and must not be stored, or rebuilt, as a ``Sphere``.
+    """
+    return cls.__dict__.get(attribute, default)
+
+
+def signature_type_name(obj: Any) -> str:
+    """The name a calculator class (or instance) has in signature payloads.
+
+    The class's own ``signature_name`` when it declares one — conventionally its
+    public import path, such as ``"pynbodyext.filters.Sphere"``, which stays put
+    when the defining module is reorganised — and otherwise its full
+    :func:`~pynbodyext.util._type.class_path`.
+    """
+    cls = obj if isinstance(obj, type) else type(obj)
+    declared = _own(cls, "signature_name", None)
+    return declared if isinstance(declared, str) and declared else class_path(cls)
+
+
+def signature_type_version(obj: Any) -> int:
+    """The class's own ``signature_version`` (0 when it declares none).
+
+    Bump it when what a calculator computes changes for the same parameters, so
+    results stored under the old signature stop matching the new code.
+    """
+    cls = obj if isinstance(obj, type) else type(obj)
+    version = _own(cls, "signature_version", 0)
+    if not isinstance(version, int) or isinstance(version, bool) or version < 0:
+        raise TypeError(f"{cls.__qualname__}.signature_version must be a non-negative int, got {version!r}")
+    return version
+
+
+def register_signature_type(cls: type) -> None:
+    """Register the ``signature_name`` and ``signature_aliases`` *cls* declares.
+
+    Called for every calculator class by ``CalculatorBase.__init_subclass__``; a
+    class that declares neither is identified by its class path and needs no
+    entry.  A name is unique: claiming one another class already holds raises
+    :class:`TypeError`, because two classes behind one name would make a stored
+    signature ambiguous.  Re-creating the same class (a module reload, or the
+    copy ``dataclasses`` makes for ``slots=True``) replaces the entry.
+    """
+    names = []
+    declared = _own(cls, "signature_name", None)
+    if declared is not None:
+        if not isinstance(declared, str) or not declared:
+            raise TypeError(f"{cls.__qualname__}.signature_name must be a non-empty string, got {declared!r}")
+        names.append(declared)
+    aliases = _own(cls, "signature_aliases", ())
+    if isinstance(aliases, str) or not all(isinstance(alias, str) and alias for alias in aliases):
+        raise TypeError(f"{cls.__qualname__}.signature_aliases must be a tuple of non-empty strings")
+    names.extend(aliases)
+    signature_type_version(cls)  # validate early, at class creation
+
+    for name in names:
+        current = _SIGNATURE_TYPES.get(name)
+        if current is not None and current is not cls and class_path(current) != class_path(cls):
+            raise TypeError(
+                f"signature name {name!r} is already taken by {class_path(current)}; {class_path(cls)} cannot claim it"
+            )
+    for name in names:
+        _SIGNATURE_TYPES[name] = cls
+
+
+def resolve_signature_type(name: str) -> Any:
+    """Return the class a payload names: a registered name or alias, else an import path."""
+    registered = _SIGNATURE_TYPES.get(name)
+    if registered is not None:
+        return registered
+    return import_object(name)
