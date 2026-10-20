@@ -107,7 +107,7 @@ def test_store_roundtrips_result_keyed_on_signature():
     fetched = store.fetch(ref)
     np.testing.assert_allclose(dict(fetched.value)["m"], dict(result.value)["m"])
     assert fetched.provenance is not None
-    assert fetched.provenance.calculator_signature_hash == structured.short_hash()
+    assert fetched.provenance.calculator_signature_hash == structured.hash
 
     # lookup without a ref works too
     found = store.get(sim_signature=("sim", "snap_103"), calculator_signature=structured)
@@ -148,7 +148,7 @@ def test_stored_key_is_content_addressed_from_signature():
     ref = store.store(result, sim_signature=("sim", "snap_103"), calculator_signature=structured)
 
     key_hash = compute_calculator_key(structured)[0]
-    assert ref.calculator_signature_hash == key_hash == structured.short_hash()
+    assert ref.calculator_signature_hash == key_hash == structured.hash
     assert store.get(sim_signature=("sim", "snap_103"), calculator_signature=structured) is not None
 
 
@@ -182,7 +182,7 @@ def test_engine_run_stores_result_when_store_provided():
     fetched = store.fetch(refs[0])
     assert fetched.value == result.value
     assert fetched.provenance is not None
-    assert fetched.provenance.calculator_signature_hash == structured.short_hash()
+    assert fetched.provenance.calculator_signature_hash == structured.hash
 
 
 def test_calculator_run_threads_store_through() -> None:

@@ -91,7 +91,7 @@ def test_provenance_and_result_signatures_stay_correct() -> None:
     sim = make_sim()
     result = calc.run(sim)
 
-    expected_hash = calc.signature_hash()
+    expected_hash = calc.to_signature().hash
     assert result.provenance is not None
     assert result.provenance.calculator_signature_hash == expected_hash
     assert result.provenance.calculator_signature_text == calc.signature_text()

@@ -15,7 +15,16 @@ implements.  The public surface is small:
   imported lazily, so the rest of the package works without it.
 """
 
-from .base import RESULT_STORE_SCHEMA, InMemoryResultStore, RecordRef, ResultRecord, ResultStore, compute_calculator_key
+from .base import (
+    RESULT_STORE_SCHEMA,
+    InMemoryResultStore,
+    RecordRef,
+    ResultRecord,
+    ResultStore,
+    SignatureMismatchError,
+    UnstableSignatureError,
+    compute_calculator_key,
+)
 from .codec import ValueCodec
 from .sqlalchemy_store import SQLAlchemyResultStore
 
@@ -28,4 +37,6 @@ __all__ = [
     "InMemoryResultStore",
     "SQLAlchemyResultStore",
     "compute_calculator_key",
+    "UnstableSignatureError",
+    "SignatureMismatchError",
 ]

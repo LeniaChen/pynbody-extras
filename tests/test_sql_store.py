@@ -51,7 +51,7 @@ def test_sql_store_roundtrips_result():
     fetched = store.fetch(ref)
     np.testing.assert_allclose(dict(fetched.value)["m"], dict(result.value)["m"])
     assert fetched.provenance is not None
-    assert fetched.provenance.calculator_signature_hash == structured.short_hash()
+    assert fetched.provenance.calculator_signature_hash == structured.hash
 
     # a different sim identity is a miss
     assert not store.has(sim_signature=("sim", "other"), calculator_signature=structured)
@@ -113,7 +113,7 @@ def test_engine_run_persists_to_sql_store_and_reloads(tmp_path):
     assert found is not None
     assert found.value == result.value
     assert found.provenance is not None
-    assert found.provenance.calculator_signature_hash == structured.short_hash()
+    assert found.provenance.calculator_signature_hash == structured.hash
 
 
 def test_sql_store_load_reconstructs_calculator_from_text(tmp_path):

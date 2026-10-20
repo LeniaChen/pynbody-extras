@@ -432,6 +432,16 @@ class SignaturePrinter(_ValuePrinter):
         return f"CombinedCalculator({items})"
 
     @staticmethod
+    def pipeline(payload: dict[str, Any]) -> str:
+        """Render a pipeline as ``Pipeline({"m": MassSum(), ...})``."""
+        name = _short_class_name(str(payload.get("class", "Pipeline")))
+        outputs = ", ".join(
+            f"{_quote_string(str(item['key']))}: {SignaturePrinter.calculator(item['value'])}"
+            for item in payload.get("outputs", ())
+        )
+        return f"{name}({{{outputs}}})"
+
+    @staticmethod
     def transform_chain(payload: dict[str, Any]) -> str:
         name = _short_class_name(str(payload.get("class", "TransformChain")))
         ts = ", ".join(SignaturePrinter.calculator(i) for i in payload.get("transforms", ()))
@@ -481,6 +491,7 @@ class SignaturePrinter(_ValuePrinter):
 # Populate the calculator table after the class definition: it names methods
 # defined below it, and the value table is declared inline (see the class body).
 SignaturePrinter._CALCULATOR_HANDLERS = {
+    "pipeline": SignaturePrinter.pipeline,
     "dataclass": SignaturePrinter.dataclass_calculator,
     "scoped": SignaturePrinter.scoped_calculator,
     "combined": SignaturePrinter.combined_calculator,
@@ -586,6 +597,12 @@ class TreePrinter(_ValuePrinter):
     def generic_head(payload: dict[str, Any]) -> str:
         return _short_class_name(str(payload.get("class", "Calculator")))
 
+    @staticmethod
+    def pipeline_head(payload: dict[str, Any]) -> str:
+        """Label a nested pipeline by its output names: ``Pipeline(m, t)``."""
+        name = _short_class_name(str(payload.get("class", "Pipeline")))
+        return f"{name}({', '.join(str(item['key']) for item in payload.get('outputs', ()))})"
+
     # ------------------------------------------------------------------
     # Calculator head dispatch
     # ------------------------------------------------------------------
@@ -605,6 +622,7 @@ class TreePrinter(_ValuePrinter):
 # Populate the calculator table after the class definition: it names methods
 # defined below it, and the value table is declared inline.
 TreePrinter._CALCULATOR_HEADERS = {
+    "pipeline": TreePrinter.pipeline_head,
     "dataclass": TreePrinter.dataclass_head,
     "scoped": TreePrinter.scoped_head,
     "transform_chain": TreePrinter.transform_chain_head,
