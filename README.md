@@ -1,5 +1,7 @@
 # pynbodyext: Extensions and Utilities for pynbody
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 `pynbodyext` extends [pynbody](https://github.com/pynbody/pynbody) with composable
 calculators, binned profiles and ready-to-publish 2-D maps.
 
@@ -35,6 +37,8 @@ Install [uv](https://docs.astral.sh/uv/) first if it is not already available.
 `uv sync --all-extras` is the equivalent bootstrap if you prefer `uv` directly.
 The architecture vocabulary and the invariants the tests enforce live in
 [`CONTEXT.md`](CONTEXT.md).
+Work items and cross-device handoffs live in [`docs/README.md`](docs/README.md);
+the current queue is [`docs/work/INDEX.md`](docs/work/INDEX.md).
 
 ---
 

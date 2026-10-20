@@ -7,7 +7,9 @@ Read it first, then follow the reading order below.
 
 1. `CONTEXT.md` — glossary, architecture invariants, and where each layer lives.
    Use its vocabulary in issues, tests, and PRs.
-2. The tests for the area — they encode the public contract.
+2. `docs/work/INDEX.md` — find the work item for the task, then read its
+   `meta.json`, `en.md`/`zh-CN.md`, and the last `handoff.md` entry.
+3. The tests for the area — they encode the public contract.
 
 ## Environment
 
@@ -29,6 +31,9 @@ from the repository root, so `testdata/...` paths are stable.
 | `make cpp-test` | native C++ tests; needs `g++` |
 | `make format` | `ruff format ./pynbodyext` |
 | `make check` | lint + typecheck + fast tests |
+| `make docs-check` | validate work-item pairs, metadata, and index |
+| `make work-item TYPE=bug TITLE_EN="..." TITLE_ZH="..."` | create a bilingual item |
+| `make archive-item ID=BUG-0001` | archive a `done` item into `docs/history/` |
 
 ## Workflow
 
@@ -41,7 +46,12 @@ from the repository root, so `testdata/...` paths are stable.
    spec or ADR first and say so in the PR.
 5. Run `make check`; run `make test-all` when touching data paths, native code,
    or public behavior.
-6. Open a PR with the template and paste the red -> green evidence.
+6. Update both `en.md` and `zh-CN.md`, set `meta.json.status`, and append a
+   `handoff.md` entry before opening the PR.
+7. Open a PR with the template and paste the red -> green evidence.
+8. After the retention window, archive a `done` item with
+   `make archive-item ID=...`; the history row points at the last commit that
+   still contains the full work item.
 
 ## Guardrails
 
@@ -51,6 +61,10 @@ from the repository root, so `testdata/...` paths are stable.
   without an explicit requirement change.
 - Never commit `testdata/`, `.venv/`, `build/`, `dist/`, coverage output, or
   secrets.
+- Keep `en.md` and `zh-CN.md` in sync; the docs check enforces pairing and IDs,
+  not translation quality.
+- Never reuse a work-item ID, including IDs that have been archived into
+  `docs/history/`.
 - Do not add a dependency without updating `pyproject.toml` and `uv.lock`
   together.
 - If a task is ambiguous about architecture, stop and ask rather than guessing.

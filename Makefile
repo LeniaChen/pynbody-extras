@@ -39,6 +39,10 @@ help:
 	@printf "  $(C_CYAN)test-all$(C_RESET)           Run the whole pytest suite$(C_RESET)\n"
 	@printf "  $(C_CYAN)test-data$(C_RESET)          Run only tests needing testdata$(C_RESET)\n"
 	@printf "  $(C_CYAN)setup$(C_RESET)              Create .venv and install git hooks$(C_RESET)\n"
+	@printf "  $(C_CYAN)docs-check$(C_RESET)         Validate work-item pairs and index$(C_RESET)\n"
+	@printf "  $(C_CYAN)docs-index$(C_RESET)         Regenerate docs/work/INDEX.md$(C_RESET)\n"
+	@printf "  $(C_CYAN)work-item$(C_RESET)          Create a bilingual work item$(C_RESET)\n"
+	@printf "  $(C_CYAN)archive-item$(C_RESET)       Archive a done item into docs/history$(C_RESET)\n"
 	@printf "\n"
 	@printf "  $(C_CYAN)bench-check$(C_RESET)        asv check (import/discover only)$(C_RESET)\n"
 	@printf "  $(C_CYAN)bench-setup$(C_RESET)        asv setup (create envs if not using existing)$(C_RESET)\n"
@@ -48,7 +52,7 @@ help:
 	@printf "  $(C_CYAN)bench-continuous$(C_RESET)   Regression gate: BASE..HEAD (FACTOR)$(C_RESET)\n"
 
 
-.PHONY: setup require-dev lint format typecheck test test-all test-data check
+.PHONY: setup require-dev lint format typecheck test test-all test-data check docs-check docs-index work-item archive-item
 
 # One-command bootstrap for a fresh clone. `.python-version` pins the interpreter.
 setup:
@@ -79,7 +83,19 @@ test-all:
 test-data:
 	$(PY) -m pytest -m data
 
-check: lint typecheck test
+docs-check:
+	$(PY) scripts/check_docs.py
+
+docs-index:
+	$(PY) scripts/render_index.py
+
+work-item:
+	$(PY) scripts/new_work_item.py --type "$(TYPE)" --title-en "$(TITLE_EN)" --title-zh "$(TITLE_ZH)"
+
+archive-item:
+	$(PY) scripts/archive_work_item.py --id "$(ID)"
+
+check: lint typecheck test docs-check
 
 .PHONY: cpp-test
 cpp-test:

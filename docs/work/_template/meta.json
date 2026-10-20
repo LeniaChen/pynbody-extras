@@ -1,0 +1,16 @@
+{
+  "id": "BUG-0000",
+  "type": "bug",
+  "status": "draft",
+  "title_en": "{{TITLE_EN}}",
+  "title_zh": "{{TITLE_ZH}}",
+  "owner": "",
+  "issue": 0,
+  "created": "{{DATE}}",
+  "updated": "{{DATE}}",
+  "completed": null,
+  "resolution": null,
+  "pr": null,
+  "related": [],
+  "locales": ["en", "zh-CN"]
+}

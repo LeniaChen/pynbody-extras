@@ -1,0 +1,16 @@
+{
+  "id": "BUG-0001",
+  "type": "bug",
+  "status": "ready",
+  "title_en": "Result execution tree renders only the root node",
+  "title_zh": "Result 的 Execution tree 只渲染根节点",
+  "owner": "",
+  "issue": 0,
+  "created": "2026-10-20",
+  "updated": "2026-10-20",
+  "completed": null,
+  "resolution": null,
+  "pr": null,
+  "related": [],
+  "locales": ["en", "zh-CN"]
+}
