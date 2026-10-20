@@ -86,14 +86,14 @@ return ResultQuery.display_children_of(result, current)
 
 ## 验收标准
 
-- [ ] 对上述 fixture，`result.execution_tree` 包含所有可达节点（五行，
+- [x] 对上述 fixture，`result.execution_tree` 包含所有可达节点（五行，
       包括两个分支上的共享 filter）。
-- [ ] 共享节点会以 hit 形式再次出现，但子树不会重复展开。
-- [ ] 父子结构与同一结果的 `result.report_node_tree()` 一致。
-- [ ] `rich` HTML card 的 Execution tree `<pre>` 中包含 `MassSum`、
+- [x] 共享节点会以 hit 形式再次出现，但子树不会重复展开。
+- [x] 父子结构与同一结果的 `result.report_node_tree()` 一致。
+- [x] `rich` HTML card 的 Execution tree `<pre>` 中包含 `MassSum`、
       `TempMean` 和 `RBelow`。
-- [ ] `max_depth=0` 时仍使用共享措辞 `... N nodes hidden`。
-- [ ] 新增的回归测试在修复前失败、修复后通过。
+- [x] `max_depth=0` 时仍使用共享措辞 `... N nodes hidden`。
+- [x] 新增的回归测试在修复前失败、修复后通过。
 
 ## 测试计划
 
@@ -130,6 +130,20 @@ return ResultQuery.display_children_of(result, current)
 - 重新设计 execution tree 的标签或性能元数据。
 - 修改 `simple` HTML card 的下钻布局。
 - 增加新的 cache/observer 字段。
+
+## 结果
+
+已在 PR #23 中修复（`cb61b15`、`21e0a08`）。
+
+- 对 `make_pipeline()` fixture，`result.execution_tree` 现在完整渲染五行；
+  第二个 `RBelow` 显示为 `[cache=hit]`。
+- 修复前（红）：execution tree 只有根节点一行，
+  `test_tree_lines_asks_for_each_lines_children_at_most_once` 失败
+  （`children("root")` 被调用两次）。
+- 修复后（绿）：`tests/test_calculate_render.py` 中五个新测试在
+  macOS / Python 3.11.7 上全部通过。同一次 `make test` 共
+  797 通过 / 6 失败 / 3 跳过；6 个失败与本条无关，分别记录为
+  BUG-0002 和 BUG-0003。
 
 ## 待决问题
 
