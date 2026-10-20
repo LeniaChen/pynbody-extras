@@ -47,6 +47,8 @@ from .codec import ValueCodec
 if TYPE_CHECKING:
     from pynbodyext.core.calculate.result.result import Result, ValueSummary
 
+    from .catalog import SignatureCatalog
+
 __all__ = [
     "RESULT_STORE_SCHEMA",
     "UnstableSignatureError",
@@ -443,6 +445,35 @@ class ResultStore(ABC):
     def list_refs(self, *, sim_signature: tuple[Any, ...] | None = None) -> list[RecordRef]:
         """List stored records, optionally filtered by simulation identity."""
         return self._list(sim_signature)
+
+    def catalog(self) -> SignatureCatalog:
+        """A :class:`~pynbodyext.core.calculate.store.catalog.SignatureCatalog` of every stored calculator.
+
+        Each record carries the signature it was stored under, so the store can
+        say which calculators it holds results for, rebuild them, and describe a
+        key it returns.  Entries carry no label; a sample table, or the caller,
+        labels the ones it uses.
+        """
+        from .catalog import SignatureCatalog
+
+        catalog = SignatureCatalog()
+        seen: set[str] = set()
+        for ref in self.list_refs():
+            if ref.calculator_signature_hash in seen:
+                continue
+            seen.add(ref.calculator_signature_hash)
+            record = self._get_by_key(ref.sim_signature, ref.calculator_signature_hash)
+            if record is None or not record.calculator_signature_text:
+                continue
+            catalog.add(CalculatorSignature.from_json(record.calculator_signature_text))
+        return catalog
+
+    def sim_signatures(self) -> list[tuple[Any, ...]]:
+        """Every simulation identity the store holds a result for, in first-stored order."""
+        out: dict[tuple[Any, ...], None] = {}
+        for ref in self.list_refs():
+            out.setdefault(tuple(ref.sim_signature), None)
+        return list(out)
 
     def __contains__(self, ref: RecordRef) -> bool:
         return self._get_by_key(ref.sim_signature, ref.calculator_signature_hash) is not None

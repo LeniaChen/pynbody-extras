@@ -230,11 +230,14 @@ from .runtime.options import RunOptions
 from .runtime.progress import NullProgressSink, ProgressSink
 from .runtime.scopes import Scope, ScopeSpec, TransformScope
 from .runtime.sim_identity import id_based_sim_identity, snapshot_identity
+from .sample import SampleRow, SampleTable
 from .store import (
+    CatalogEntry,
     InMemoryResultStore,
     RecordRef,
     ResultRecord,
     ResultStore,
+    SignatureCatalog,
     ValueCodec,
     compute_calculator_key,
 )
@@ -263,6 +266,10 @@ __all__ = [
     "ExecutionContext",
     "RunOptions",
     "snapshot_identity",
+    "SampleTable",
+    "SampleRow",
+    "SignatureCatalog",
+    "CatalogEntry",
     "id_based_sim_identity",
     "NodeInput",
     "FilterResult",

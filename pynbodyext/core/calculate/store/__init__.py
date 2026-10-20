@@ -26,6 +26,7 @@ from .base import (
     UnstableSimIdentityError,
     compute_calculator_key,
 )
+from .catalog import CatalogEntry, SignatureCatalog
 from .codec import ValueCodec
 from .sqlalchemy_store import SQLAlchemyResultStore
 
@@ -41,4 +42,6 @@ __all__ = [
     "UnstableSignatureError",
     "UnstableSimIdentityError",
     "SignatureMismatchError",
+    "SignatureCatalog",
+    "CatalogEntry",
 ]

@@ -59,6 +59,19 @@ Use these terms exactly. Don't drift to synonyms.
 - **`ResultStore`** (`store/base.py`) — the persistence seam. `store`/`fetch`/
   `get`/`has`/`delete`/`list_refs` over four abstract primitives
   (`_put`, `_get_by_key`, `_delete`, `_list`).
+- **`SignatureCatalog`** (`store/catalog.py`) — keys (full signature hashes)
+  mapped to their signatures and optional labels: turns a key back into the
+  calculator (`catalog.calculator(key)`) and its expression. Looked up by full
+  key, unique prefix of >= 8 characters, or label; a label names one key.
+  Saved as JSON; `ResultStore.catalog()` collects the calculators a store holds.
+- **`SampleTable`** (`sample.py`, the `sample` layer above `bins`) — objects
+  (rows, keyed by simulation identity) × calculators (columns, keyed by
+  signature), so each cell is a result-store key and a study computes only what
+  the store lacks. `compute` / `add` / `fill_from_store` / `from_store`;
+  `column`, `where`, `missing`; `to_dataframe` (column metadata in
+  `df.attrs["pynbodyext"]`), lossless `save` / `load` (JSON, values via
+  `ValueCodec`, columns via the catalog). Cells are separate runs: shared
+  dependencies are not shared between columns.
 - **Record** (`store/base.py::ResultRecord`) — one self-describing, codec-encoded
   row (value + named + provenance), serializable via `to_json`/`from_json`.
 - **`ValueCodec`** (`store/codec.py`) — portable value serialization (numpy,
