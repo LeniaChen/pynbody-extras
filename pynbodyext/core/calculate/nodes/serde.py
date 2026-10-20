@@ -13,10 +13,16 @@ node layer: the lower module asks the registry instead of reaching up.  See
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import is_dataclass
 from typing import Any
 
-from pynbodyext.core.calculate.interfaces import register_calculator_layer
+from pynbodyext.core.calculate.interfaces import (
+    register_calculator_layer,
+    resolve_signature_type,
+    signature_type_name,
+    signature_type_version,
+)
 from pynbodyext.core.calculate.result.enums import RevertPolicy
 from pynbodyext.core.calculate.result.signature import (
     _COMMUTATIVE_PROPERTY_OPS,
@@ -27,7 +33,6 @@ from pynbodyext.core.calculate.result.signature import (
     _merge_encoded,
     _sort_encoded_commutative,
 )
-from pynbodyext.util._type import class_path, import_object
 
 
 def _is_calculator(value: Any) -> bool:
@@ -53,6 +58,41 @@ def _is_plain_pipeline(value: Any) -> bool:
     from .pipeline import Pipeline
 
     return isinstance(value, Pipeline) and type(value).__init__ is Pipeline.__init__
+
+
+def _class_identity(calculator: Any) -> dict[str, Any]:
+    """The ``class`` (and ``version``, when declared) entries of a payload.
+
+    ``class`` is the class's signature name (:func:`signature_type_name`), so a
+    class that declares ``signature_name`` keeps its key when its module moves;
+    ``version`` is present only when the class declares a non-zero
+    ``signature_version``, so declaring none leaves existing keys alone.
+    """
+    identity: dict[str, Any] = {"class": signature_type_name(calculator)}
+    version = signature_type_version(calculator)
+    if version:
+        identity["version"] = version
+    return identity
+
+
+def _resolve_class(payload: dict[str, Any]) -> Any:
+    """The class a payload names, warning when it was recorded at another version.
+
+    The class is rebuilt either way — the parameters still apply — but it is the
+    current algorithm that will run, and its signature (hence key) differs from
+    the recorded one.
+    """
+    cls = resolve_signature_type(str(payload["class"]))
+    recorded = int(payload.get("version", 0))
+    current = signature_type_version(cls)
+    if recorded != current:
+        warnings.warn(
+            f"{payload['class']} was recorded at signature_version {recorded}; rebuilding it at version "
+            f"{current}, which computes with the current code and has a different signature",
+            UserWarning,
+            stacklevel=4,
+        )
+    return cls
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +143,7 @@ def _encode_dataclass(calculator: Any, path: str, inline_bytes: int) -> _Encoded
     init_entries = _encode_init_entries(calculator, path, inline_bytes)
     init_payload: dict[str, Any] = {name: enc.value for name, enc in init_entries}
     children.extend(enc for _, enc in init_entries)
-    payload: dict[str, Any] = {"node": "dataclass", "class": class_path(calculator)}
+    payload: dict[str, Any] = {"node": "dataclass", **_class_identity(calculator)}
     if init_payload:
         payload["init"] = init_payload
     if ts is not None:
@@ -132,7 +172,7 @@ def _encode_special(calculator: Any, path: str, inline_bytes: int) -> _Encoded |
         ]
         pipeline_payload = {
             "node": "pipeline",
-            "class": class_path(calculator),
+            **_class_identity(calculator),
             "outputs": [{"key": key, "value": enc.value} for key, enc in outputs],
         }
         encoded = _merge_encoded(pipeline_payload, [enc for _, enc in outputs])
@@ -151,7 +191,7 @@ def _encode_special(calculator: Any, path: str, inline_bytes: int) -> _Encoded |
         ]
         payload: dict[str, Any] = {
             "node": "transform_chain",
-            "class": class_path(calculator),
+            **_class_identity(calculator),
             "transforms": [e.value for e in transforms],
         }
         if ts is not None:
@@ -194,7 +234,7 @@ def _encode_special(calculator: Any, path: str, inline_bytes: int) -> _Encoded |
     elif isinstance(calculator, LambdaProperty):
         # The function is identified by its repr, which carries its address: it
         # separates two lambdas within a run, but not across sessions.
-        payload = {"node": "lambda_property", "class": class_path(calculator), "func_repr": repr(calculator._func)}
+        payload = {"node": "lambda_property", **_class_identity(calculator), "func_repr": repr(calculator._func)}
         encoded = _Encoded(payload, constructible=False, paths=(f"{path}.func",), unstable=(f"{path}.func",))
 
     return encoded
@@ -222,14 +262,19 @@ def _encode_generic(calculator: Any, path: str, inline_bytes: int) -> _Encoded:
     children.extend(deps)
     ts, ts_children = _transform_state(calculator, inline_bytes, path)
     children.extend(ts_children)
-    payload: dict[str, Any] = {"node": "generic", "class": class_path(calculator), "identity": identity}
+    payload: dict[str, Any] = {"node": "generic", **_class_identity(calculator), "identity": identity}
     if deps:
         payload["deps"] = [e.value for e in deps]
     if ts is not None:
         payload["transform"] = ts
     merged = _merge_encoded(payload, children)
     unstable = (*merged.unstable, path) if opaque else merged.unstable
-    return _Encoded(merged.value, constructible=False, paths=(*merged.paths, path), unstable=unstable)
+    # Rebuildable when the class says how: ``from_signature_payload`` is the
+    # inverse of ``signature_payload``.  The deps are encoded for identity only;
+    # a node derives them from its own state again when rebuilt.
+    rebuildable = not opaque and callable(getattr(type(calculator), "from_signature_payload", None))
+    paths = merged.paths if rebuildable else (*merged.paths, path)
+    return _Encoded(merged.value, constructible=rebuildable and merged.constructible, paths=paths, unstable=unstable)
 
 
 def encode_calculator(
@@ -268,8 +313,18 @@ def _decode_scoped(payload: dict[str, Any]) -> Any:
     return base
 
 
+def _decode_generic(payload: dict[str, Any]) -> Any:
+    """Rebuild a hand-written node through its ``from_signature_payload`` classmethod."""
+    cls = _resolve_class(payload)
+    rebuild = getattr(cls, "from_signature_payload", None)
+    if not callable(rebuild) or "opaque_id" in payload.get("identity", {}):
+        raise ValueError(f"cannot reconstruct {payload['class']}: it defines no from_signature_payload()")
+    identity = {key: _Decoder.decode_value(value) for key, value in payload.get("identity", {}).items()}
+    return _apply_transform_state(rebuild(identity), payload.get("transform"))
+
+
 def _decode_pipeline(payload: dict[str, Any]) -> Any:
-    cls = import_object(payload["class"])
+    cls = _resolve_class(payload)
     return cls({item["key"]: _Decoder.decode_value(item["value"]) for item in payload["outputs"]})
 
 
@@ -280,7 +335,7 @@ def _decode_combined(payload: dict[str, Any]) -> Any:
 
 
 def _decode_transform_chain(payload: dict[str, Any]) -> Any:
-    cls = import_object(payload["class"])
+    cls = _resolve_class(payload)
     return _apply_transform_state(
         cls(*(_Decoder.decode_value(item) for item in payload["transforms"])), payload.get("transform")
     )
@@ -349,12 +404,13 @@ def _decode_special(payload: dict[str, Any]) -> Any:
 
 def _decode_dataclass(payload: dict[str, Any]) -> Any:
     """Decode a dataclass calculator payload."""
-    cls = import_object(payload["class"])
+    cls = _resolve_class(payload)
     values = {name: _Decoder.decode_value(enc) for name, enc in payload.get("init", {}).items()}
     return _apply_transform_state(cls(**values), payload.get("transform"))
 
 
 _SPECIAL_DECODERS: dict[str, Any] = {
+    "generic": _decode_generic,
     "pipeline": _decode_pipeline,
     "scoped": _decode_scoped,
     "combined": _decode_combined,

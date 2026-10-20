@@ -55,6 +55,8 @@ class ParamContain(PropertyBase[SimArray]):
     no cumulative sum to search, the calculation then fails on its own.
     """
 
+    signature_name = "pynbodyext.properties.ParamContain"
+
     frac: Param[float] = Param(default=0.5)
     cal_key: str = "r"
     parameter: str = "mass"
@@ -92,6 +94,8 @@ class ParamSum(PropertyBase[Any]):
         Field name to sum.
     """
 
+    signature_name = "pynbodyext.properties.ParamSum"
+
     parameter: str
 
     def calculate(self, sim: Any, params: Any = None) -> Any:
@@ -111,6 +115,8 @@ class VolumeDensity(PropertyBase[SimArray]):
     parameter: str
         Field name to use as the weight for the density calculation.
     """
+
+    signature_name = "pynbodyext.properties.VolumeDensity"
 
     rmax: Param[ValueLike] = Param(field_name="pos")
     rmin: Param[ValueLike] = Param(default=0.0, field_name="pos")
@@ -143,6 +149,8 @@ class SurfaceDensity(PropertyBase[SimArray]):
     parameter: str
         Field name to use as the weight for the surface density calculation.
     """
+
+    signature_name = "pynbodyext.properties.SurfaceDensity"
 
     rmax: Param[ValueLike] = Param(field_name="pos")
     rmin: Param[ValueLike] = Param(default=0.0, field_name="pos")
@@ -190,6 +198,8 @@ class RadiusAtSurfaceDensity(PropertyBase[SimArray]):
     :meth:`~pynbodyext.core.calculate.nodes.base.CalculatorBase.check_input`; with
     no profile to search, the calculation then fails on its own.
     """
+
+    signature_name = "pynbodyext.properties.RadiusAtSurfaceDensity"
 
     target: Param[ValueLike]
     parameter: str = "mass"

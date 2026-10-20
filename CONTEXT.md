@@ -19,6 +19,19 @@ Use these terms exactly. Don't drift to synonyms.
   or a function repr — `LambdaProperty`, a node without `signature_payload`).
   A `Pipeline` is identified by its ordered output names and children; its
   `name`, like every node's, is a label.
+- **Signature name** — how a payload names a calculator class: the class's own
+  `signature_name` (conventionally its public import path, e.g.
+  `pynbodyext.filters.Sphere`), else its class path. Not inherited: a subclass
+  is another calculator. Registered at class creation
+  (`interfaces.register_signature_type`), unique, and resolved back by
+  `interfaces.resolve_signature_type`, which also knows `signature_aliases`, so
+  moving or renaming a class keeps stored keys readable.
+- **Signature version** — a class's own `signature_version` (default 0, omitted
+  from the payload). Bump it when what the calculator computes changes for the
+  same parameters: the key changes, so stale stored results stop matching.
+- **`from_signature_payload`** — optional classmethod, the inverse of
+  `signature_payload()`; it makes a hand-written (non-dataclass) node
+  rebuildable from its signature.
 - **`sim_signature`** — a pluggable address tuple describing *which* simulation
   object a result belongs to, e.g. `("sim", "snapshot_103", "halo_0")`. Produced
   by `EvalEngine.make_sim_signature(sim)`.

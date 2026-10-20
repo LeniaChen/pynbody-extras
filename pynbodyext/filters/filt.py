@@ -59,6 +59,8 @@ class Sphere(VolumeFilter, _Sphere):
         Sphere center in position units.
     """
 
+    signature_name = "pynbodyext.filters.Sphere"
+
     radius: Param[ValueLike] = Param(field_name="pos")
     cen: Param[ArrayLike] = Param(default=(0, 0, 0), field_name="pos")
 
@@ -73,6 +75,8 @@ class Sphere(VolumeFilter, _Sphere):
 @FilterBase.dataclass
 class FamilyFilter(FilterBase, _FamilyFilter):
     """Family selection filter."""
+
+    signature_name = "pynbodyext.filters.FamilyFilter"
 
     family: Param[FamilyLike]
 
@@ -103,6 +107,8 @@ class Cuboid(VolumeFilter, _Cuboid):
         evaluated in the current scope before the mask is built.
     """
 
+    signature_name = "pynbodyext.filters.Cuboid"
+
     x1: Param[ValueLike] = Param(field_name="pos")
     y1: Param[ValueLike] = Param(default=None, field_name="pos")
     z1: Param[ValueLike] = Param(default=None, field_name="pos")
@@ -132,6 +138,8 @@ class Cuboid(VolumeFilter, _Cuboid):
 class Disc(VolumeFilter, _Disc):
     """Disc selection filter."""
 
+    signature_name = "pynbodyext.filters.Disc"
+
     radius: Param[ValueLike] = Param(field_name="pos")
     height: Param[ValueLike] = Param(field_name="pos")
     cen: Param[ArrayLike] = Param(default=(0, 0, 0), field_name="pos")
@@ -159,6 +167,8 @@ class BandPass(FilterBase, _BandPass):
         The maximum value of the property. If a string, it is interpreted as a unit string.
     """
 
+    signature_name = "pynbodyext.filters.BandPass"
+
     prop: str
     min: Param[ValueLike]
     max: Param[ValueLike]
@@ -179,6 +189,8 @@ class HighPass(FilterBase, _HighPass):
         The minimum value of the property. If a string, it is interpreted as a unit string.
     """
 
+    signature_name = "pynbodyext.filters.HighPass"
+
     prop: str
     min: Param[ValueLike]
 
@@ -197,6 +209,8 @@ class LowPass(FilterBase, _LowPass):
     max: ValueLike
         The maximum value of the property. If a string, it is interpreted as a unit string.
     """
+
+    signature_name = "pynbodyext.filters.LowPass"
 
     prop: str
     max: Param[ValueLike]
@@ -219,6 +233,8 @@ class Annulus(VolumeFilter, _Annulus):
         Annulus center in position units.
     """
 
+    signature_name = "pynbodyext.filters.Annulus"
+
     r1: Param[ValueLike] = Param(field_name="pos")
     r2: Param[ValueLike] = Param(field_name="pos")
     cen: Param[ArrayLike] = Param(default=(0, 0, 0), field_name="pos")
@@ -235,6 +251,8 @@ class Annulus(VolumeFilter, _Annulus):
 @VolumeFilter.dataclass
 class SolarNeighborhood(VolumeFilter, _SolarNeighborhood):
     """Solar neighborhood selection filter."""
+
+    signature_name = "pynbodyext.filters.SolarNeighborhood"
 
     r1: Param[ValueLike] = Param(default="5 kpc", field_name="pos")
     r2: Param[ValueLike] = Param(default="10 kpc", field_name="pos")

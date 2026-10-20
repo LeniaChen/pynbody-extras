@@ -28,6 +28,7 @@ from pynbodyext.core.calculate.display import (
     tree_lines,
     validate_tree_limits,
 )
+from pynbodyext.core.calculate.interfaces import signature_type_name
 from pynbodyext.util._type import class_path
 
 from .enums import NodeStatus
@@ -86,10 +87,14 @@ class ResultQuery:
                     ResultQuery._short_class_name(node.class_info.semantic_calculator_class_path),
                 }
             if isinstance(query, type):
-                wanted = class_path(query)
+                # A payload names a class by its signature name, the live node by
+                # its class path; a class is matched under either.
+                wanted = {class_path(query), signature_type_name(query)}
                 class_name = query.__name__
                 return lambda node: (
-                    wanted in {node.class_info.semantic_calculator_class_path, node.class_info.calculator_class_path}
+                    bool(
+                        wanted & {node.class_info.semantic_calculator_class_path, node.class_info.calculator_class_path}
+                    )
                     or node.class_info.calculator_type == class_name
                 )
             cache_key_factory = getattr(query, "cache_key", None)

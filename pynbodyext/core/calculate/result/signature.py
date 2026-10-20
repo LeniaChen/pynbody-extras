@@ -46,6 +46,7 @@ from pynbodyext.core.calculate.interfaces import (
     decode_calculator_payload,
     encode_calculator_payload,
     is_calculator_node,
+    signature_type_name,
 )
 from pynbodyext.core.calculate.params.fields import captured_init_value, collect_param_specs
 from pynbodyext.util._type import class_path, import_object
@@ -614,7 +615,7 @@ def calculator_pretty_init_args(calculator: Any, *, inline_array_bytes: int = DE
 
     from .render import TreePrinter, display_init_payload
 
-    path = class_path(calculator)
+    path = signature_type_name(calculator)
     payload = {
         "class": path,
         "init": {name: enc.value for name, enc in _encode_init_entries(calculator, "init", inline_array_bytes)},

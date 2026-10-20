@@ -21,6 +21,8 @@ __all__ = ["CenPos", "CenVel", "AngMomVec", "KappaRot", "KappaRotMean", "VirialR
 class CenPos(PropertyBase[SimArray | np.ndarray]):
     """Center position property"""
 
+    signature_name = "pynbodyext.properties.CenPos"
+
     mode: Literal["ssc", "com", "pot", "hyb"] = "ssc"
 
     def __post_init__(self) -> None:
@@ -48,6 +50,8 @@ class CenPos(PropertyBase[SimArray | np.ndarray]):
 class CenVel(PropertyBase[SimArray]):
     """Center velocity property"""
 
+    signature_name = "pynbodyext.properties.CenVel"
+
     mode: Literal["com"] = "com"
 
     def __post_init__(self) -> None:
@@ -67,6 +71,8 @@ class CenVel(PropertyBase[SimArray]):
 @PropertyBase.dataclass
 class AngMomVec(PropertyBase[SimArray]):
     """Angular momentum vector property"""
+
+    signature_name = "pynbodyext.properties.AngMomVec"
 
     def calculate(self, sim: SimSnap, params: Any = None) -> SimArray:
         if len(sim) == 0:
@@ -105,6 +111,8 @@ class KappaRot(PropertyBase[float]):
     .. [1] Sales, L. V., et al. 2010, MNRAS, 409, 1541
     """
 
+    signature_name = "pynbodyext.properties.KappaRot"
+
     def calculate(self, sim: SimSnap, params: Any = None) -> float:
         if len(sim) == 0:
             self.warning("KappaRot received an empty particle snapshot")
@@ -137,6 +145,8 @@ class KappaRotMean(PropertyBase[float]):
     This is the mean of (0.5 * m * vcxy^2) / (m * ke) over given particles.
     """
 
+    signature_name = "pynbodyext.properties.KappaRotMean"
+
     def calculate(self, sim: SimSnap, params: Any = None) -> float:
         krot = 0.5 * sim["vcxy"] ** 2
         ke = sim["ke"]
@@ -155,6 +165,8 @@ class VirialRadius(PropertyBase[float]):
     rho_def: {"critical", "matter"}, default: "critical"
         Whether the overdensity is relative to the critical density or the mean matter density.
     """
+
+    signature_name = "pynbodyext.properties.VirialRadius"
 
     overdensity: float = 178.0
     rho_def: Literal["critical", "matter"] = "critical"
@@ -180,6 +192,8 @@ class SpinParam(PropertyBase[float]):
     ----------
     .. [1] Bullock, J. S., et al. 2001, MNRAS, 321, 559
     """
+
+    signature_name = "pynbodyext.properties.SpinParam"
 
     def calculate(self, sim: SimSnap, params: Any = None) -> float:
         """Return the spin parameter lambda' of a centered halo.

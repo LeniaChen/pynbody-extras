@@ -357,6 +357,8 @@ class TransformBase(RuntimeCalculatorBase[TransformResult[HandleT], HandleT], Ge
 class TransformChain(TransformBase[tuple[TransformStep, ...]]):
     """Sequence of transform nodes executed in order and cleaned in reverse."""
 
+    signature_name = "pynbodyext.core.calculate.TransformChain"
+
     def __init__(self, *transforms: TransformBase[Any], name: str | None = None) -> None:
         if not transforms:
             raise ValueError("At least one transform must be provided.")
@@ -452,6 +454,8 @@ class TransformChain(TransformBase[tuple[TransformStep, ...]]):
 
 class TransformPlan(TransformChain):
     """Named alias for a planned transform chain."""
+
+    signature_name = "pynbodyext.core.calculate.TransformPlan"
 
 
 def chain_transforms(*transforms: TransformBase[Any]) -> TransformBase[Any]:

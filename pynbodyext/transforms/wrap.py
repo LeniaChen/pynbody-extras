@@ -287,6 +287,8 @@ class WrapBox(TransformBase[WrapTransformation]):
         Whether to wrap the whole snapshot (the ancestor) rather than the current view.
     """
 
+    signature_name = "pynbodyext.transforms.WrapBox"
+
     #: An empty snapshot is documented as a no-op here, not a mistake.
     warns_on_empty_input: ClassVar[bool] = False
 

@@ -25,8 +25,8 @@ import json
 from dataclasses import fields as dataclass_fields
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pynbodyext.core.calculate.interfaces import resolve_signature_type
 from pynbodyext.core.calculate.params.fields import collect_param_specs
-from pynbodyext.util._type import import_object
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,7 +66,7 @@ def default_init_payload(
         cls = (
             calculator_or_path
             if isinstance(calculator_or_path, type)
-            else import_object(str(calculator_or_path))
+            else resolve_signature_type(str(calculator_or_path))
         )
         field_map = {field.name: field for field in dataclass_fields(cls)}
         defaults: dict[str, Any] = {}
@@ -118,7 +118,7 @@ def display_init_payload(payload: dict[str, Any], *, inline_array_bytes: int | N
 def _field_order(payload: dict[str, Any], init: dict[str, Any]) -> list[str]:
     """Return *payload*'s signature field names in declaration order."""
     try:
-        cls = import_object(str(payload["class"]))
+        cls = resolve_signature_type(str(payload["class"]))
         return [spec.name for spec in collect_param_specs(cls) if spec.signature]
     except Exception:
         return list(init)
@@ -132,7 +132,7 @@ def _kw_only_names(payload: dict[str, Any]) -> set[str]:
     runs.
     """
     try:
-        cls = import_object(str(payload["class"]))
+        cls = resolve_signature_type(str(payload["class"]))
         return {item.name for item in dataclass_fields(cls) if item.kw_only}
     except Exception:
         return set()
