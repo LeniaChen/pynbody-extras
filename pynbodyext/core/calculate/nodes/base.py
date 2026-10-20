@@ -98,10 +98,7 @@ from typing import (
     ClassVar,
     Generic,
     TypeVar,
-    TypeVarTuple,
-    Unpack,
     cast,
-    dataclass_transform,
     overload,
 )
 
@@ -125,6 +122,7 @@ from pynbodyext.core.calculate.result.enums import (
 )
 from pynbodyext.core.calculate.runtime.options import RunOptions
 from pynbodyext.core.calculate.runtime.scopes import ScopeSpec
+from pynbodyext.util._type import TypeVarTuple, Unpack, dataclass_transform
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
