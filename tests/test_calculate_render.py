@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from calculate_helpers import make_pipeline, make_sim
+from calculate_helpers import MassSum, RBelow, make_pipeline, make_sim
 
 from pynbodyext.core.calculate.result.repr import ResultRepr
 
@@ -64,6 +64,97 @@ def test_tree_renderers_share_the_truncation_wording() -> None:
     assert hidden in render_tree(pipeline, max_depth=0)
     assert hidden in ResultQuery.node_tree(result, max_depth=0)
     assert hidden in ResultQuery.execution_tree(result, max_depth=0)
+
+
+def _strip_execution_metadata(line: str) -> str:
+    """Drop the ``  [time; cache=...]`` suffix an execution-tree line carries."""
+    return line.split("  [", 1)[0]
+
+
+def test_tree_lines_asks_for_each_lines_children_at_most_once() -> None:
+    """``tree_lines`` must not call ``children`` twice for the same line (BUG-0001).
+
+    The execution tree keeps walk state in its callbacks; a second
+    ``children(root)`` call used to see that state and return no children.
+    """
+    from pynbodyext.core.calculate.display import tree_lines
+
+    graph = {"root": ["a", "b"], "a": ["leaf"], "b": ["leaf"], "leaf": []}
+    calls: list[str] = []
+
+    def children(node: str) -> list[str]:
+        calls.append(node)
+        return graph[node]
+
+    lines = tree_lines("root", children=children, label=str, hidden=lambda nodes: f"... {len(nodes)} hidden")
+
+    assert lines == ["root", "├─ a", "│  └─ leaf", "└─ b", "   └─ leaf"]
+    assert sorted(calls) == ["a", "b", "leaf", "leaf", "root"]
+
+
+def test_execution_tree_renders_the_whole_graph() -> None:
+    """The execution tree has the node tree's shape, not just its root (BUG-0001)."""
+    result = _result()
+    execution = str(result.execution_tree).splitlines()
+    node_tree = result.report_node_tree().splitlines()
+
+    assert len(execution) == len(node_tree) == 5
+    assert [_strip_execution_metadata(line) for line in execution] == node_tree
+    for name in ("MassSum", "TempMean", "RBelow"):
+        assert name in "\n".join(execution)
+    # The shared filter is rendered on both branches; the second time as a hit.
+    rbelow = [line for line in execution if "RBelow" in line]
+    assert len(rbelow) == 2
+    assert rbelow[1].endswith("[cache=hit]")
+
+
+def test_execution_tree_truncates_like_the_node_tree() -> None:
+    """A ``max_depth`` cut below the root keeps the root's children (BUG-0001)."""
+    from pynbodyext.core.calculate.result.query import ResultQuery
+
+    result = _result()
+    execution = ResultQuery.execution_tree(result, max_depth=1).splitlines()
+    node_tree = ResultQuery.node_tree(result, max_depth=1).splitlines()
+
+    assert len(execution) == len(node_tree) == 5
+    assert sum("hidden" in line for line in execution) == 2
+
+
+def test_execution_tree_expands_a_shared_subtree_once() -> None:
+    """A shared node with children is walked once; a repeat is a childless hit."""
+    from pynbodyext.core.calculate import Pipeline
+
+    shared = MassSum().filter(RBelow(5.0))
+    result = Pipeline({"a": shared, "b": shared * 2}, name="p").run(make_sim())
+    execution = str(result.execution_tree).splitlines()
+    node_tree = result.report_node_tree().splitlines()
+
+    # The node tree repeats the shared subtree; the execution tree does not.
+    assert sum("RBelow" in line for line in node_tree) == 2
+    assert sum("RBelow" in line for line in execution) == 1
+    # Its first occurrence is expanded; the repeat is a hit with nothing under it.
+    mass_sum = [index for index, line in enumerate(execution) if "MassSum<" in line]
+    assert len(mass_sum) == 2
+    first, repeat = mass_sum
+    assert not execution[first].endswith("[cache=hit]")
+    assert "RBelow" in execution[first + 1]
+    assert execution[repeat].endswith("[cache=hit]")
+    assert all("RBelow" not in line for line in execution[repeat + 1 :])
+
+
+def test_rich_card_execution_tree_shows_the_child_nodes() -> None:
+    """The rich card's Execution tree ``<pre>`` lists the children, not only the root."""
+    from pynbodyext.core.calculate.display import repr_style
+
+    result = _result()
+    with repr_style("rich"):
+        html = result._repr_html_()
+
+    section = html.split("Execution tree</", 1)[1]
+    pre = re.search(r"<pre[^>]*>(.*?)</pre>", section, re.DOTALL)
+    assert pre is not None
+    for name in ("MassSum", "TempMean", "RBelow"):
+        assert name in pre.group(1)
 
 
 def test_summary_contains_expected_sections() -> None:

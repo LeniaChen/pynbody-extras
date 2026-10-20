@@ -109,6 +109,22 @@ return ResultQuery.display_children_of(result, current)
 `walk()`。更稳妥的做法是让 `execution_tree` 的回调幂等，或把“已经展开”的
 状态从 `children` 回调中移出去，使契约显式化，避免同类问题再次出现。
 
+### 采用的修复
+
+两者都做，改动保持最小：
+
+1. `tree_lines()` 只计算一次 `children(root)`，并把列表传给 `walk()`；
+   `walk()` 现在接收节点的子节点列表而不是节点本身，因此每一行最多调用一次
+   `children`。docstring 写明了调用顺序契约（先序遍历、先 `label` 后
+   `children`、每行最多一次 `children`）。
+2. `ResultQuery.execution_tree()` 在 `label` 回调里判断“首次出现还是重复出现”
+   （`labelled_nodes` / `collapsed_nodes`）。`children_of()` 只读取这个状态，
+   所以对同一行调用两次会得到相同的子节点。
+
+同一个重复调用还导致 `max_depth >= 1` 时根节点子节点下方的
+`... N nodes hidden` 行丢失：`execution_tree(max_depth=1)` 只渲染出根节点。
+本次修复同样覆盖了这种情况，并有单独的测试。
+
 ## 非目标
 
 - 重新设计 execution tree 的标签或性能元数据。
@@ -119,3 +135,4 @@ return ResultQuery.display_children_of(result, current)
 
 - 重复出现的共享节点是否需要显式标记（例如 `[hit]`），还是保持现有的
   `hit_occurrence` 行为？除非修复必须改变，否则保持现状。
+  - 结论：修复不需要改变；重复出现仍渲染为 `label  [cache=hit]`，且不带子树。
