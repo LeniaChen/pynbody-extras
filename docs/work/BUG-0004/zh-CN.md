@@ -35,8 +35,12 @@ False
 
 ## 复现方式
 
+项目的 `.venv`（由 uv 创建）里没有 `setuptools`，直接调用 `setup.py` 会报
+`ModuleNotFoundError: No module named 'setuptools'`（2026-10-20 观察到）。用
+`pyproject.toml` 中的构建依赖临时补上，不改动 `.venv`：
+
 ```bash
-.venv/bin/python setup.py build_ext --inplace 2>&1 | tail -40
+uv run --with setuptools --with pybind11 python setup.py build_ext --inplace 2>&1 | tail -60
 clang++ --version
 brew list libomp 2>/dev/null && echo "libomp present"
 ```

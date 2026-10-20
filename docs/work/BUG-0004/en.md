@@ -37,8 +37,13 @@ The compiler error itself has not been captured yet (see Reproduction).
 
 ## Reproduction
 
+The project `.venv` (made by uv) has no `setuptools`, so calling `setup.py`
+directly fails with `ModuleNotFoundError: No module named 'setuptools'`
+(observed 2026-10-20). Supply the build requirements from `pyproject.toml`
+without changing `.venv`:
+
 ```bash
-.venv/bin/python setup.py build_ext --inplace 2>&1 | tail -40
+uv run --with setuptools --with pybind11 python setup.py build_ext --inplace 2>&1 | tail -60
 clang++ --version
 brew list libomp 2>/dev/null && echo "libomp present"
 ```
