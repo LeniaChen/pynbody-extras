@@ -39,3 +39,21 @@
   `tests/test_calculate_render.py`, `docs/work/BUG-0001/*`.
 - Env: Python 3.13 (isolated `display.py` harness) / ruff 0.16.9 / mypy 2.3.1;
   pynbody not installed.
+
+## 2026-10-20 — Claude @ cloud session
+
+- State: review
+- Done: first local run (macOS, Python 3.11.7): 4 of 5 new tests passed;
+  `test_execution_tree_truncates_like_the_node_tree` failed because the test
+  assumed `max_depth=1` shows the root's children. In this codebase
+  `max_depth=1` folds everything under the root (2 lines, matching
+  `node_tree`). The test now checks `max_depth=1` (2 lines) and
+  `max_depth=2` (5 lines) against the node tree.
+- Next: re-run the five tests, then `make lint && make test && make docs-check
+  && make test-all`.
+- Failing test: none expected.
+- Blockers: `make typecheck` reports 22 mypy errors, all in files this item
+  does not touch (gravity, store, plot/image, bins, transforms); likely
+  pre-existing stub drift, to be tracked separately.
+- Files: `tests/test_calculate_render.py`, `docs/work/BUG-0001/*`.
+- Env: Python 3.11.7 / pytest 9.0.2 (user's Mac).

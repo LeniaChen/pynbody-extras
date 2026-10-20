@@ -109,15 +109,22 @@ def test_execution_tree_renders_the_whole_graph() -> None:
 
 
 def test_execution_tree_truncates_like_the_node_tree() -> None:
-    """A ``max_depth`` cut below the root keeps the root's children (BUG-0001)."""
+    """A ``max_depth`` cut keeps the same lines as the node tree (BUG-0001).
+
+    ``max_depth=1`` folds everything under the root into one hidden line;
+    ``max_depth=2`` shows the root's children and folds the filters below them.
+    Before the fix the execution tree rendered only the root line for both.
+    """
     from pynbodyext.core.calculate.result.query import ResultQuery
 
     result = _result()
-    execution = ResultQuery.execution_tree(result, max_depth=1).splitlines()
-    node_tree = ResultQuery.node_tree(result, max_depth=1).splitlines()
+    for max_depth, expected_lines, expected_hidden in ((1, 2, 1), (2, 5, 2)):
+        execution = ResultQuery.execution_tree(result, max_depth=max_depth).splitlines()
+        node_tree = ResultQuery.node_tree(result, max_depth=max_depth).splitlines()
 
-    assert len(execution) == len(node_tree) == 5
-    assert sum("hidden" in line for line in execution) == 2
+        assert len(node_tree) == expected_lines, node_tree
+        assert len(execution) == expected_lines, execution
+        assert sum("hidden" in line for line in execution) == expected_hidden, execution
 
 
 def test_execution_tree_expands_a_shared_subtree_once() -> None:

@@ -121,8 +121,8 @@ return ResultQuery.display_children_of(result, current)
    （`labelled_nodes` / `collapsed_nodes`）。`children_of()` 只读取这个状态，
    所以对同一行调用两次会得到相同的子节点。
 
-同一个重复调用还导致 `max_depth >= 1` 时根节点子节点下方的
-`... N nodes hidden` 行丢失：`execution_tree(max_depth=1)` 只渲染出根节点。
+同一个重复调用还导致 `max_depth >= 1` 时 `... N nodes hidden` 行丢失：
+`execution_tree(max_depth=1)` 和 `max_depth=2` 都只渲染出根节点那一行。
 本次修复同样覆盖了这种情况，并有单独的测试。
 
 ## 非目标

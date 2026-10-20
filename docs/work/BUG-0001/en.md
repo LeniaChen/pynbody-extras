@@ -131,9 +131,9 @@ Both, kept small:
    reads that state, so calling it twice for the same line returns the same
    children.
 
-The same double call also dropped the `... N nodes hidden` lines under the
-root's children for `max_depth >= 1`: `execution_tree(max_depth=1)` rendered
-only the root. The fix covers that case too, and it has its own test.
+The same double call also dropped the `... N nodes hidden` lines for
+`max_depth >= 1`: `execution_tree(max_depth=1)` and `max_depth=2` rendered
+only the root line. The fix covers that case too, and it has its own test.
 
 ## Non-goals
 
