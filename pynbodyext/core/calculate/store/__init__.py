@@ -23,6 +23,7 @@ from .base import (
     ResultStore,
     SignatureMismatchError,
     UnstableSignatureError,
+    UnstableSimIdentityError,
     compute_calculator_key,
 )
 from .codec import ValueCodec
@@ -38,5 +39,6 @@ __all__ = [
     "SQLAlchemyResultStore",
     "compute_calculator_key",
     "UnstableSignatureError",
+    "UnstableSimIdentityError",
     "SignatureMismatchError",
 ]

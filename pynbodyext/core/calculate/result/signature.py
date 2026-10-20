@@ -138,16 +138,25 @@ class CalculatorSignature:
 
     @property
     def hash(self) -> str:
-        """Return the content hash of this signature: sha256 hex of schema + payload.
+        """Return the content hash of this signature: sha256 hex of schema + identity.
 
         Only what identifies the computation is hashed — the schema version and
-        the payload.  The descriptive flags (``constructible``, ``stable`` and
-        their paths) are derived from the payload and are left out, so they can
-        evolve without moving any key.  Equal for equal calculators in every
-        session when :attr:`stable` is true.
+        :meth:`identity`, the canonical form of the payload.  The descriptive flags
+        (``constructible``, ``stable`` and their paths) are derived from the
+        payload and are left out, so they can evolve without moving any key.
+        Equal for equal calculators in every session when :attr:`stable` is true.
         """
-        identity = {"schema": SIGNATURE_SCHEMA, "payload": self.payload}
+        identity = {"schema": SIGNATURE_SCHEMA, "payload": self.identity()}
         return hashlib.sha256(_canonical_payload(identity).encode("utf-8")).hexdigest()
+
+    def identity(self) -> Any:
+        """The payload in canonical form: what two signatures must share to be equal.
+
+        Numbers compare by value — an integral float reads as the integer it
+        equals, so ``Sphere(30)`` and ``Sphere(30.0)`` share a key — while the
+        payload itself keeps the values as given, for rebuilding and display.
+        """
+        return _canonical_identity(self.payload)
 
     def short_hash(self, *, length: int = 12) -> str:
         return self.hash[:length]
@@ -264,6 +273,24 @@ def _non_constructible(value: Any, path: str, reason: str, **metadata: Any) -> _
 
 def _canonical_payload(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_identity(value: Any) -> Any:
+    """Return *value* with every integral float replaced by the int it equals.
+
+    ``30`` and ``30.0`` (and ``-0.0`` and ``0``) are the same number to every
+    calculator parameter that accepts both, so they must not split a key.  Booleans
+    stay booleans, and non-integral or non-finite floats are kept as they are.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
+    if isinstance(value, dict):
+        return {key: _canonical_identity(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_identity(item) for item in value]
+    return value
 
 
 _COMMUTATIVE_PROPERTY_OPS = {"add", "mul", "eq", "ne"}
@@ -418,7 +445,7 @@ class _Encoder:
 def _encoded_values_equal(left: Any, right: Any, inline_array_bytes: int) -> bool:
     le = _Encoder.encode_value(left, "default", inline_array_bytes)
     re = _Encoder.encode_value(right, "default", inline_array_bytes)
-    return _canonical_payload(le.value) == _canonical_payload(re.value)
+    return _canonical_payload(_canonical_identity(le.value)) == _canonical_payload(_canonical_identity(re.value))
 
 
 # ---------------------------------------------------------------------------

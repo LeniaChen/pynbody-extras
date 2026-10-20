@@ -1,48 +1,119 @@
-"""Pluggable simulation identity for provenance and persistence.
+"""Pluggable simulation identity for provenance, caching and persistence.
 
-The calculator engine keys in-run cache entries and stored provenance on a
-simulation identity tuple.  The default provider is object-identity based,
-which is correct for the transient in-run cache but useless across processes or
-notebook sessions: ``id(sim)`` changes every time a snapshot is reloaded.
+The calculator engine keys in-run cache entries, provenance and stored results on
+a simulation identity tuple.  Its first element says how far the identity can be
+trusted:
 
-A persistence-aware caller (e.g. a database-backed result store) injects a
-stable identity provider that maps a snapshot to an address-based reference such
-as ``("sim", "/path/snap_103", "halo_0")``.  This module defines the provider
-``Protocol`` together with the default id-based implementation.
+``("sim", ...)``
+    A *stable* address: the same simulation object, loaded again in another
+    session, gets the same tuple.  Only stable identities may key a persistent
+    result store.
+``("session", id(obj))``
+    Valid in this process only: the default :func:`id_based_sim_identity`, and the
+    answer of :func:`snapshot_identity` for anything it cannot address durably.
 
-Threading
----------
-The engine receives a provider at construction time
-(:meth:`~pynbodyext.core.calculate.runtime.engine.EvalEngine`); ``calculator.run``
-keeps the default.  The stored store factory that wants a stable identity should
-construct its own ``EvalEngine`` with its provider (or set the provider on an
-engine it owns).
+:func:`snapshot_identity` is the stable provider for pynbody snapshots:
+
+- a snapshot loaded from a file → ``("sim", <absolute path>)``;
+- a halo of it → ``("sim", <path>, "halo", <number>, <digest>)``;
+- any other sub-snapshot (a filter, a slice) → ``("sim", <path>, "subset", <digest>)``.
+
+The *digest* is a hash of the particle indices the sub-snapshot selects from its
+file, so a halo is matched by its particles and not only by a catalogue number
+that a re-run halo finder may reuse.
+
+What the identity cannot see, and therefore makes session-only: a snapshot with no
+file (``pynbody.new``), and a snapshot with a pynbody transformation still applied
+(``sim.translate``, ``analysis.center``, a rotation) — its positions are no longer
+the file's.  Apply such transformations inside the calculator graph instead
+(``ShiftPosTo``, ``AlignVec`` …), where they are part of the calculator signature.
+Editing arrays in place (``sim["mass"] *= 2``) is not tracked at all.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
 from typing import Any, Protocol, TypeAlias
 
-__all__ = ["SimIdentity", "SimIdentityProvider", "id_based_sim_identity"]
+import numpy as np
 
+from pynbodyext.core.calculate.interfaces import SESSION_TAG, STABLE_TAG, is_stable_sim_identity
+
+__all__ = [
+    "SimIdentity",
+    "SimIdentityProvider",
+    "SESSION_TAG",
+    "STABLE_TAG",
+    "id_based_sim_identity",
+    "snapshot_identity",
+    "is_stable_sim_identity",
+]
 
 class SimIdentityProvider(Protocol):
-    """Maps a simulation object to a stable identity tuple."""
+    """Maps a simulation object to an identity tuple."""
 
     def __call__(self, sim: Any) -> tuple[Any, ...]: ...
 
 
-#: Concrete identity tuple produced by a provider.  The first element is
-#: conventionally the provider tag (e.g. ``"sim"``); trailing elements carry the
-#: address used to re-fetch the snapshot/object.
+#: Concrete identity tuple produced by a provider: a tag (:data:`STABLE_TAG` or
+#: :data:`SESSION_TAG`) followed by the address.
 SimIdentity: TypeAlias = tuple[Any, ...]
 
 
 def id_based_sim_identity(sim: Any) -> tuple[Any, ...]:
-    """Default provider: identity based on the object's in-process id.
+    """Default provider: the object's in-process ``id``.
 
-    Unique within a process and cheap to compute, so it is correct for the
-    transient per-run cache.  Not stable across loads, so it is unsuitable on
-    its own for persistence.
+    Unique within a process and free to compute, so it is right for the transient
+    per-run cache; tagged :data:`SESSION_TAG` because it means nothing after a
+    reload.
     """
-    return ("sim", id(sim))
+    return (SESSION_TAG, id(sim))
+
+
+def _is_file_name(filename: Any) -> bool:
+    """Whether *filename* names a file, not a placeholder such as ``"<created>"``.
+
+    ``pynbody.new`` names its snapshots ``"<created>"``.  Existence is not checked:
+    a multi-file snapshot is named by a prefix that is not itself a file.
+    """
+    if not filename:
+        return False
+    text = os.fspath(filename)
+    return not (text.startswith("<") and text.endswith(">"))
+
+
+def _has_transformations(obj: Any) -> bool:
+    return bool(getattr(obj, "_transformations", None))
+
+
+def _index_digest(sim: Any, ancestor: Any) -> str:
+    """A short hash of the particle indices *sim* selects from *ancestor*."""
+    indices = np.ascontiguousarray(np.asarray(sim.get_index_list(ancestor), dtype=np.int64))
+    return hashlib.sha256(indices.tobytes()).hexdigest()[:16]
+
+
+def snapshot_identity(sim: Any) -> tuple[Any, ...]:
+    """Stable provider for pynbody snapshots: file path, plus halo or particle subset.
+
+    Falls back to :func:`id_based_sim_identity` (a session-only identity) for a
+    snapshot without a file or with a pynbody transformation applied; see the
+    module documentation.
+    """
+    ancestor = getattr(sim, "ancestor", sim)
+    filename: Any = getattr(ancestor, "filename", None)
+    if not _is_file_name(filename):
+        return id_based_sim_identity(sim)
+    if _has_transformations(sim) or _has_transformations(ancestor):
+        return id_based_sim_identity(sim)
+
+    path = os.path.abspath(os.fspath(filename))
+    if sim is ancestor:
+        return (STABLE_TAG, path)
+
+    digest = _index_digest(sim, ancestor)
+    halo_number = getattr(sim, "_halo_number", None)
+    if halo_number is not None:
+        number = halo_number.item() if isinstance(halo_number, np.generic) else halo_number
+        return (STABLE_TAG, path, "halo", number, digest)
+    return (STABLE_TAG, path, "subset", digest)

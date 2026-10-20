@@ -292,6 +292,8 @@ class Result(Generic[T]):
 
     reports: ReportsView = field(default_factory=ReportsView)
     diagnostics: DiagnosticsView = field(default_factory=DiagnosticsView)
+    #: True when the result was read from a result store instead of computed.
+    from_store: bool = field(default=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.named, NamedView):

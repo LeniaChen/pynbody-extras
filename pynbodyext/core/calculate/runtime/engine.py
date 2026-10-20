@@ -117,7 +117,7 @@ from .context import ExecutionContext
 from .input import NodeInput
 from .options import RunOptions
 from .progress import NodeProgressEvent, RunProgressEvent
-from .sim_identity import SimIdentityProvider, id_based_sim_identity
+from .sim_identity import SimIdentityProvider, id_based_sim_identity, is_stable_sim_identity
 
 if TYPE_CHECKING:
     from pynbodyext.core.calculate.nodes.base import CalculatorBase
@@ -147,6 +147,7 @@ class EvalEngine:
         options: RunOptions | None = None,
         *,
         store: ResultStore | None = None,
+        reuse: bool = True,
     ) -> Result[TPublic]:
         """Run ``node`` on ``sim`` and return a :class:`Result`.
 
@@ -159,10 +160,16 @@ class EvalEngine:
         options : RunOptions, optional
             Execution options.
         store : ResultStore, optional
-            When given, the assembled result is persisted on completion keyed by
-            ``(engine.make_sim_signature(sim), root CalculatorSignature)``.  The
-            store is only written to when the run completes cleanly (no errors),
-            so a failed run never silently persists a partial value.
+            A result store keyed by ``(engine.make_sim_signature(sim), root
+            CalculatorSignature)``.  With ``reuse`` (the default) a stored result
+            is returned instead of computing (``result.from_store`` is true);
+            otherwise the node is evaluated and the result is stored when the run
+            completes cleanly (no errors), so a failed run never persists a
+            partial value.  A persistent store is neither read nor written when
+            either half of the key is session-only; the run warns and computes.
+        reuse : bool, default True
+            Look the result up in *store* before computing.  ``False`` always
+            computes and replaces the stored result (a refresh).
 
         Notes
         -----
@@ -173,11 +180,22 @@ class EvalEngine:
         signature.
         """
         opts = options or RunOptions()
+        sim_signature = self.make_sim_signature(sim)
+
+        store_refusal: str | None = None
+        if store is not None:
+            calculator_signature = node.to_signature()
+            store_refusal = self._store_refusal(store, sim_signature, calculator_signature)
+            if store_refusal is None and reuse:
+                hit = store.get(sim_signature=sim_signature, calculator_signature=calculator_signature, calculator=node)
+                if hit is not None:
+                    return hit
+
         started = time.perf_counter()
         estimated_total_nodes = self._estimate_total_nodes(node)
 
         ctx = ExecutionContext(
-            sim=sim, sim_signature=self.make_sim_signature(sim), run_id=str(uuid.uuid4()), options=opts, engine=self
+            sim=sim, sim_signature=sim_signature, run_id=str(uuid.uuid4()), options=opts, engine=self
         )
 
         status = "ok"
@@ -219,22 +237,33 @@ class EvalEngine:
         result = self._assemble_result(node=node, ctx=ctx, root=root, run_label=run_label, started=started)
 
         if store is not None and not result.errors:
-            calculator_signature = getattr(getattr(ctx, "nodes", None), "root_signature", None)
-            if calculator_signature is None:
-                calculator_signature = node.to_signature()
-            if calculator_signature.stable or not getattr(store, "persistent", True):
-                store.store(result, sim_signature=ctx.sim_signature, calculator_signature=calculator_signature)
+            if store_refusal is None:
+                store.store(result, sim_signature=ctx.sim_signature, calculator_signature=node.to_signature())
             else:
                 # The run itself succeeded; only its key would be meaningless in a
                 # later session, so the result is returned but not persisted.
-                paths = ", ".join(calculator_signature.unstable_paths) or "unknown"
-                warnings.warn(
-                    f"result of {run_label!r} was not stored: its signature is session-specific at {paths}",
-                    UserWarning,
-                    stacklevel=2,
-                )
+                warnings.warn(f"result of {run_label!r} was not stored: {store_refusal}", UserWarning, stacklevel=2)
 
         return result
+
+    @staticmethod
+    def _store_refusal(store: ResultStore, sim_signature: tuple[Any, ...], calculator_signature: Any) -> str | None:
+        """Why *store* cannot key this run, or ``None`` when it can.
+
+        Only a persistent store refuses: its keys must mean the same thing in the
+        next session, so neither half may be session-only.
+        """
+        if not getattr(store, "persistent", True):
+            return None
+        if not is_stable_sim_identity(sim_signature):
+            return (
+                f"the simulation identity {sim_signature!r} is session-only (a snapshot without a file, "
+                "or with a transformation applied outside the calculator)"
+            )
+        if not calculator_signature.stable:
+            paths = ", ".join(calculator_signature.unstable_paths) or "unknown"
+            return f"its signature is session-specific at {paths}"
+        return None
 
     # ------------------------------------------------------------------
     # Batch / light-weight execution path

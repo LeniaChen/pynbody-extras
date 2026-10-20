@@ -89,10 +89,14 @@ class SQLAlchemyResultStore(ResultStore):
     # ------------------------------------------------------------------
 
     def _put(self, record: ResultRecord) -> RecordRef:
+        # Storing under an existing key replaces the record (a recomputation), in
+        # one transaction, as the in-memory store does.
+        key = _record_key(record.sim_signature, record.calculator_signature_hash)
         with self.engine.begin() as conn:
+            conn.execute(self._table.delete().where(self._table.c.record_key == key))
             result = conn.execute(
                 self._table.insert().values(
-                    record_key=_record_key(record.sim_signature, record.calculator_signature_hash),
+                    record_key=key,
                     sim_signature=_sig_text(record.sim_signature),
                     calculator_signature_hash=record.calculator_signature_hash,
                     pretty_key=record.pretty_key,

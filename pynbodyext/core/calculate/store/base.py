@@ -16,9 +16,11 @@ The signature system is the source of the identity:
   its textual representation, and whose JSON text allows reconstruction.
 
 A record found under a hash is checked against the requested signature before it
-is returned, and a persistent store refuses a signature that is not
-:attr:`~CalculatorSignature.stable` (one identified by ``id()`` or a function
-repr), whose key would mean nothing in the next session.
+is returned.  A persistent store refuses either half of a key that would mean
+nothing in the next session: a calculator signature that is not
+:attr:`~CalculatorSignature.stable` (identified by ``id()`` or a function repr),
+and a session-only simulation identity (see
+:mod:`~pynbodyext.core.calculate.runtime.sim_identity`).
 
 :class:`ResultStore` is deliberately an abstract template: it implements the
 high-level :meth:`ResultStore.store`, :meth:`ResultStore.fetch`,
@@ -37,6 +39,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pynbodyext.core.calculate.interfaces import is_stable_sim_identity
 from pynbodyext.core.calculate.result.signature import CalculatorSignature, calculator_from_signature
 
 from .codec import ValueCodec
@@ -47,6 +50,7 @@ if TYPE_CHECKING:
 __all__ = [
     "RESULT_STORE_SCHEMA",
     "UnstableSignatureError",
+    "UnstableSimIdentityError",
     "SignatureMismatchError",
     "RecordRef",
     "ResultRecord",
@@ -62,6 +66,10 @@ RESULT_STORE_SCHEMA = "pynbodyext.result.store/v2"
 
 class UnstableSignatureError(ValueError):
     """A persistent store was asked to key a record on a session-specific signature."""
+
+
+class UnstableSimIdentityError(ValueError):
+    """A persistent store was asked to key a record on a session-only simulation identity."""
 
 
 class SignatureMismatchError(RuntimeError):
@@ -123,7 +131,7 @@ def _check_record(record: ResultRecord | None, signature: CalculatorSignature) -
     if record is None or not record.calculator_signature_text:
         return record
     stored = CalculatorSignature.from_json(record.calculator_signature_text)
-    if stored.payload != signature.payload:
+    if stored.identity() != signature.identity():
         raise SignatureMismatchError(
             f"record {record.calculator_signature_hash[:12]}... was stored for {stored.pretty()!r}, "
             f"not for {signature.pretty()!r}"
@@ -211,8 +219,13 @@ class ResultRecord:
             created_at=created_at if created_at is not None else time.time(),
         )
 
-    def to_result(self, codec: ValueCodec) -> Result:
-        """Reconstruct a :class:`Result` from a stored record."""
+    def to_result(self, codec: ValueCodec, *, calculator: Any = None) -> Result:
+        """Reconstruct a :class:`Result` from a stored record.
+
+        *calculator* is attached as ``result.calculator`` when the caller already
+        holds the live node (a cache hit during a run); otherwise it is rebuilt
+        from the stored signature text when possible.
+        """
         from pynbodyext.core.calculate.result.enums import BuiltinKinds, NodeStatus
         from pynbodyext.core.calculate.result.result import (
             NodeRecord,
@@ -263,8 +276,7 @@ class ResultRecord:
                 calculator_signature_hash=self.calculator_signature_hash,
             )
 
-        calculator = None
-        if self.calculator_signature_text:
+        if calculator is None and self.calculator_signature_text:
             try:
                 calculator = calculator_from_signature(self.calculator_signature_text)
             except Exception:
@@ -280,6 +292,7 @@ class ResultRecord:
             calculator=calculator,
             provenance=provenance,
             perf_summary=PerfSummary(),
+            from_store=True,
         )
 
     def to_json(self) -> str:
@@ -378,6 +391,12 @@ class ResultStore(ABC):
             If the store is :attr:`persistent` and the signature is not
             :attr:`~CalculatorSignature.stable`.
         """
+        if self.persistent and not is_stable_sim_identity(tuple(sim_signature)):
+            raise UnstableSimIdentityError(
+                f"cannot persist a result keyed on a session-only simulation identity {tuple(sim_signature)!r}. "
+                "Use a snapshot loaded from a file with no transformation applied outside the calculator "
+                "(see runtime.sim_identity.snapshot_identity), or pass a stable sim_identity provider."
+            )
         if self.persistent and not calculator_signature.stable:
             paths = ", ".join(calculator_signature.unstable_paths) or "unknown"
             raise UnstableSignatureError(
@@ -401,10 +420,16 @@ class ResultStore(ABC):
             raise KeyError(f"no stored result for {ref.key!r}")
         return record.to_result(self.codec)
 
-    def get(self, *, sim_signature: tuple[Any, ...], calculator_signature: CalculatorSignature) -> Result | None:
-        """Return the stored result for an identity, or ``None`` on a miss."""
+    def get(
+        self, *, sim_signature: tuple[Any, ...], calculator_signature: CalculatorSignature, calculator: Any = None
+    ) -> Result | None:
+        """Return the stored result for an identity, or ``None`` on a miss.
+
+        *calculator*, when given, becomes ``result.calculator`` instead of a node
+        rebuilt from the stored signature.
+        """
         record = _check_record(self._get_by_key(tuple(sim_signature), calculator_signature.hash), calculator_signature)
-        return None if record is None else record.to_result(self.codec)
+        return None if record is None else record.to_result(self.codec, calculator=calculator)
 
     def has(self, *, sim_signature: tuple[Any, ...], calculator_signature: CalculatorSignature) -> bool:
         """Whether a result already exists for an identity."""

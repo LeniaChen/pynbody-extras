@@ -499,6 +499,7 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         *,
         store: ResultStore | None = None,
         sim_identity: SimIdentityProvider | None = None,
+        reuse: bool = True,
         **overrides: Unpack[RunOptionKwargs],
     ) -> TPublic:
         """Evaluate the calculator and return a public value.
@@ -517,6 +518,8 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         sim_identity : SimIdentityProvider, optional
             Identity provider for a restart-stable simulation address (see
             :meth:`run`).
+        reuse : bool, default True
+            Return a stored result instead of computing (see :meth:`run`).
         **overrides
             Any :class:`RunOptions` field, by name — ``cache``, ``progress``,
             ``perf_time``, ``perf_memory``, ``observe``, ``backend``,
@@ -529,7 +532,7 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         TPublic
             Public value returned by this calculator after execution and materialization.
         """
-        return self.run(sim, options=options, store=store, sim_identity=sim_identity, **overrides).value
+        return self.run(sim, options=options, store=store, sim_identity=sim_identity, reuse=reuse, **overrides).value
 
     def _resolve_run_options(
         self,
@@ -559,6 +562,7 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         *,
         sim_identity: SimIdentityProvider | None = None,
         store: ResultStore | None = None,
+        reuse: bool = True,
         **overrides: Unpack[RunOptionKwargs],
     ) -> Result[TPublic]:
         """Run the calculator and return a Result.
@@ -570,14 +574,20 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
         options : RunOptions, optional
             Base execution options to merge with keyword overrides.
         sim_identity : SimIdentityProvider, optional
-            Identity provider mapping the simulation object to a stable address
-            tuple (``("sim", "snapshot_103", "halo_0")``).  When given, the engine
-            keys provenance and the store on this identity instead of the default
-            id-based one, so a stored result survives restarts.
+            Identity provider mapping the simulation object to an address tuple
+            (``("sim", "/data/snap_103", "halo", 0, ...)``).  When given, the engine
+            keys provenance and the store on this identity.  Defaults to the
+            session-only id-based identity, except with a persistent *store*, where
+            it defaults to :func:`~pynbodyext.core.calculate.runtime.sim_identity.snapshot_identity`
+            (file path plus halo / particle subset), so stored results are found
+            again after a restart.
         store : ResultStore, optional
-            When given, the assembled result is persisted on completion keyed by
-            ``(sim_identity(sim), root CalculatorSignature)``.  Only written on a
-            clean run (see :meth:`EvalEngine.run`).
+            A result store keyed by ``(sim_identity(sim), root CalculatorSignature)``.
+            A stored result is returned instead of computing (``result.from_store``);
+            otherwise the result is stored on a clean run (see :meth:`EvalEngine.run`).
+        reuse : bool, default True
+            Look the result up in *store* first.  ``False`` always computes and
+            replaces the stored result.
         **overrides
             Any :class:`RunOptions` field, by name; each option is documented on
             :class:`RunOptions`.  A name passed as ``None`` keeps the value the
@@ -589,10 +599,13 @@ class _CalculatorRunMixin(_CalculatorContract, Generic[TRaw, TPublic]):
             Result object containing the public value and diagnostics from this run.
         """
         from pynbodyext.core.calculate.runtime.engine import EvalEngine
+        from pynbodyext.core.calculate.runtime.sim_identity import snapshot_identity
 
+        if sim_identity is None and store is not None and getattr(store, "persistent", True):
+            sim_identity = snapshot_identity
         engine = EvalEngine(sim_identity=sim_identity) if sim_identity is not None else EvalEngine()
         merged = self._resolve_run_options(options=options, **overrides)
-        return engine.run(cast("CalculatorBase[Any, TPublic]", self), sim, merged, store=store)
+        return engine.run(cast("CalculatorBase[Any, TPublic]", self), sim, merged, store=store, reuse=reuse)
 
     def value(self, sim: Any, options: RunOptions | None = None, **overrides: Unpack[RunOptionKwargs]) -> TPublic:
         """Evaluate the calculator and return only the public value.
