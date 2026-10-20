@@ -35,6 +35,8 @@ _ORDER = (
     "runtime",
     "nodes",
     "bins",
+    # many objects x many calculators: runs nodes, reads and writes the store
+    "sample",
     # the package facade wires everything together, so it sits at the top
     "",
 )

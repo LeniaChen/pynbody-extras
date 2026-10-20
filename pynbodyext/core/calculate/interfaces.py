@@ -6,7 +6,7 @@ without the ones above it.  The order, lowest first — the same tuple
 ``tests/test_layering_contract.py`` checks every run-time import against:
 
 ``interfaces`` · ``display`` · ``params`` · ``diagnostics`` · ``result`` · ``store`` ·
-``runtime`` · ``nodes`` · ``bins``
+``runtime`` · ``nodes`` · ``bins`` · ``sample``
 
 Two things break that order on their own, and both are handled here rather than by
 an import:
