@@ -760,12 +760,17 @@ def tree_lines(
 
     *label* renders one node's line and *hidden* describes the nodes a
     ``max_depth`` / ``max_children`` cut leaves out. The root carries no branch.
+
+    Call order is part of the contract, so a caller may keep walk state in its
+    callbacks (the execution tree does, to expand a shared node only once):
+    nodes are visited depth-first in pre-order, ``label(node)`` is called before
+    ``children(node)``, and ``children`` is called **at most once** per rendered
+    line.
     """
     validate_tree_limits(max_depth, max_children)
     lines: list[str] = [label(root)]
 
-    def walk(node: T, prefix: str, depth: int) -> None:
-        node_children = list(children(node))
+    def walk(node_children: list[T], prefix: str, depth: int) -> None:
         if not node_children:
             return
         if max_depth is not None and depth >= max_depth:
@@ -778,15 +783,17 @@ def tree_lines(
             is_last = index == len(visible) - 1 and not omitted
             branch = "└─" if is_last else "├─"
             lines.append(f"{prefix}{branch} {label(child)}")
-            walk(child, prefix + ("   " if is_last else "│  "), depth + 1)
+            walk(list(children(child)), prefix + ("   " if is_last else "│  "), depth + 1)
         if omitted:
             lines.append(f"{prefix}└─ {hidden(omitted)}")
 
+    # ``children(root)`` is evaluated exactly once and handed to the walk: a
+    # second call would see whatever state the first one left behind (BUG-0001).
     root_children = list(children(root))
     if max_depth == 0 and root_children:
         lines.append(f"└─ {hidden(root_children)}")
     else:
-        walk(root, "", 1)
+        walk(root_children, "", 1)
     return lines
 
 

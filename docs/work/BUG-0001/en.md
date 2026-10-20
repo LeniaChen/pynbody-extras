@@ -117,6 +117,24 @@ list into `walk()`. Making `execution_tree`'s callback idempotent, or moving the
 "already expanded" tracking out of the `children` callback, would make the
 contract explicit and prevent the same bug from returning.
 
+### Chosen fix
+
+Both, kept small:
+
+1. `tree_lines()` evaluates `children(root)` once and passes the list into
+   `walk()`; `walk()` now takes a node's children rather than the node, so
+   `children` is called at most once per rendered line. The docstring states the
+   call-order contract (pre-order, `label` before `children`, `children` at most
+   once per line).
+2. `ResultQuery.execution_tree()` decides "first occurrence vs. repeat" in its
+   `label` callback (`labelled_nodes` / `collapsed_nodes`). `children_of()` only
+   reads that state, so calling it twice for the same line returns the same
+   children.
+
+The same double call also dropped the `... N nodes hidden` lines for
+`max_depth >= 1`: `execution_tree(max_depth=1)` and `max_depth=2` rendered
+only the root line. The fix covers that case too, and it has its own test.
+
 ## Non-goals
 
 - Redesigning the execution-tree labels or performance metadata.
@@ -128,3 +146,5 @@ contract explicit and prevent the same bug from returning.
 - Should a repeated shared node be marked explicitly (for example `[hit]`), or
   keep the existing `hit_occurrence` behaviour? Preserve the current behaviour
   unless the fix requires a change.
+  - Answer: the fix did not require a change; a repeat still renders as
+    `label  [cache=hit]` with no subtree.

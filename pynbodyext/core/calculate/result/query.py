@@ -526,9 +526,19 @@ class ResultQuery:
     ) -> str:
         start = result.root if node is None else ResultQuery.resolve_node(result, node)
         cache_events = ResultQuery._cache_events_by_node(result)
-        rendered_nodes: set[str] = set()
+        # A shared node is expanded only where it is first rendered; any later
+        # occurrence is a cache hit with no subtree. ``label`` decides which
+        # occurrence that is (``tree_lines`` labels a line before asking for its
+        # children), so ``children_of`` stays a pure query that is safe to call
+        # more than once for the same line.
+        labelled_nodes: set[str] = set()
+        collapsed_nodes: set[str] = set()
 
         def label(current: ResultNode) -> str:
+            hit_occurrence = current.node_id in labelled_nodes
+            labelled_nodes.add(current.node_id)
+            if hit_occurrence:
+                collapsed_nodes.add(current.node_id)
             return ResultQuery._execution_label(
                 result,
                 current,
@@ -538,9 +548,7 @@ class ResultQuery:
                 include_observer=include_observer,
                 include_values=include_values,
                 cache_events=cache_events,
-                # A node that the walk has already rendered is shown as a hit
-                # again rather than descended into a second time.
-                hit_occurrence=current.node_id in rendered_nodes,
+                hit_occurrence=hit_occurrence,
             )
 
         def hidden(current: list[ResultNode]) -> str:
@@ -554,9 +562,8 @@ class ResultQuery:
             )
 
         def children_of(current: ResultNode) -> list[ResultNode]:
-            if current.node_id in rendered_nodes:
+            if current.node_id in collapsed_nodes:
                 return []
-            rendered_nodes.add(current.node_id)
             return ResultQuery.display_children_of(result, current)
 
         return "\n".join(
