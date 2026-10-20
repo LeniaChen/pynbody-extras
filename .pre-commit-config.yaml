@@ -2,16 +2,16 @@ repos:
   - repo: local
     hooks:
       - id: ruff-check
-        name: ruff check (run "ruff check")
-        entry: ruff
+        name: ruff check
+        entry: uv run ruff
         language: system
         types: [python]
         files: '^pynbodyext/'               # only trigger in src
         args: ["check"]
         pass_filenames: true
       - id: mypy
-        name: mypy (run "mypy")
-        entry: mypy
+        name: mypy
+        entry: uv run mypy
         language: system
         types: [python]
         files: '^pynbodyext/'               # only trigger in src

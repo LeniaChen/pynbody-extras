@@ -1,7 +1,7 @@
 # Context
 
 Single-context repo. This file defines the vocabulary used across the calculator
-and result-store subsystems. Decisions live in [`docs/adr/`].
+and result-store subsystems, plus the architecture invariants the tests enforce.
 
 ## Glossary
 
@@ -64,7 +64,7 @@ Use these terms exactly. Don't drift to synonyms.
 - **`ValueCodec`** (`store/codec.py`) — portable value serialization (numpy,
   pynbody `SimArray` with units, scalars, nested structures, pickle fallback).
 - **tangos** — the Python package this store is modeled on; a relational DB that
-  interns name strings. We deliberately diverge (see ADR-0001).
+  interns name strings. We deliberately diverge.
 - **Repr style** — how a calculator object renders in a notebook, set by
   `display.set_repr_style` (session-wide) or `display.repr_style` (a `with`
   block): `rich` (cards, `<details>`, badges, inlined CSS) or `simple`
@@ -99,7 +99,7 @@ Use these terms exactly. Don't drift to synonyms.
 - **View-only attribute** — a public attribute that exists only to render
   something already reachable elsewhere. Deliberately avoided: the detail lives
   on the object itself (via `InfoView`) or on the report method (via
-  `TextReport`). See ADR-0002.
+  `TextReport`).
 
 ## Persistence entry points
 
@@ -128,81 +128,22 @@ calculator, result = store.load(
 rerun = calculator.run(sim)   # the recipe is fully rebuilt from the text
 ```
 
-## Relevant decisions
+## Architecture invariants (each one is a test)
 
-- [ADR-0001](docs/adr/0001-result-store-content-addressed-by-signature.md): the
-  result store is keyed by content-addressed signatures rather than interned
-  names — better than tangos because identity derives from what was *computed*
-  (and stays stable across restarts via `engine.make_sim_signature`).
-- [ADR-0002](docs/adr/0002-display-protocol-render-existing-objects.md): display
-  comes from the existing objects (`InfoView` rows, `TextReport` methods) rather
-  than parallel view-only attributes, so `rich` and `simple` cannot drift apart.
-- [ADR-0004](docs/adr/0004-image-layer-takes-plain-2d-arrays.md): the image
-  layer (`plot/image/`) takes plain 2-D arrays rather than calculator nodes, so
-  any map producer can feed it; `ImageData` is the only place that knows the
-  calculator layer.
-- [ADR-0005](docs/adr/0005-image-data-is-the-pipeline-object.md): the image layer
-  is class-centric — one `ImageData` composed from capability mixins, free
-  functions underneath — and every image drawn anywhere in the package goes
-  through it.
-- [ADR-0006](docs/adr/0006-image-capabilities-are-composed-views.md): the
-  capabilities are *views* reached as properties, found
-  through a registry so a new family is a new module rather than a new base class,
-  and colour bars are docked to their panel by one helper.
-- [ADR-0007](docs/adr/0007-image-orientation-is-type-driven.md): orientation is
-  decided by the type (`as_image` transposes a `BinsArray`), so
-  `adaptive.bin(bins.s["count"])` means what it looks like, and a raw transposed
-  grid is named in the error.
-- [ADR-0008](docs/adr/0008-image-noise-models.md): two explicit, seeded noise
-  models — Gaussian (`sigma` or `snr`) and Poisson (`exposure`, `background`) —
-  rather than hidden noise in the display path.
-- [ADR-0009](docs/adr/0009-display-is-a-family-too.md): `display` is a capability
-  family like the others, so no operation has a flat spelling and `ImageData`
-  carries only what it *is* (supersedes decision 4 of ADR-0006).
-- [ADR-0010](docs/adr/0010-two-entry-points-display-and-process.md): an image
-  has two entry points — `image.display.*` for showing it and
-  `image.process.*` for working on it — with the families nested inside the
-  second.
-- [ADR-0011](docs/adr/0011-the-colormap-is-saurons.md): the colour map is Cappellari &
-  Emsellem's SAURON map, reproduced from its published table bit-for-bit and
-  registered under its own name, `"sauron"` (`"sauron_r"`), with the source
-  credited in the code.
-- [ADR-0012](docs/adr/0012-drop-the-profiles-and-chunk-modules.md): the legacy
-  `profiles` and `chunk` packages are gone — `core/calculate/bins` (`Bin1D`/
-  `BinND`) is the one binning implementation, so profile building has a single
-  statistics vocabulary (`"mass.sum"`, `"vz.disp"`, …) and the chunked-array
-  experiment (dask, the `chunk` extra) is no longer carried.
-- [ADR-0013](docs/adr/0013-sph-render-smoothes-the-binned-queries.md), extended by
-  [ADR-0014](docs/adr/0014-one-entry-point-for-sph-render.md) and
-  [ADR-0015](docs/adr/0015-sph-render-answers-derived-properties.md):
-  `bins.sph_render[...]` answers the same queries through an SPH kernel instead of
-  cell membership — a *view*, so the result is a `BinsArray` on the same grid and
-  the units match the strict query.  Two or three spatial axes with evenly spaced
-  bins (anything else raises), `count` is the kernel-integrated particle number,
-  both dimensions render with pynbody (2-D projected, 3-D `to_3d_grid`, whose z
-  pixels upstream now follow `nz`), the mean-likes are kernel sums while
-  `median`/`pXX` are weighted quantiles.
-  The quantiles *scatter* rather than gather: every particle spreads its kernel
-  over the cells it reaches, so a cell sees exactly the neighbours its kernel sums
-  see — no nearest-neighbour cap (an earlier version had one, and it truncated up
-  to 44% of a cell's weight on a real snapshot).  The pair loop is a compiled
-  kernel (`cpp/image/scatter.cpp`, with a NumPy fallback), the reduction counts
-  weights into value bins and orders only the entries a percentile falls between
-  (`bucketed_weighted_percentiles`), and the grid is processed in slabs of rows to
-  bound memory.  One entry point, no mode: the statistic picks the engine, so the
-  kernel sums stay cheap and a quantile pays for itself — about a dozen kernel
-  sums, with a `UserWarning` when the scatter would be huge.
-  The view answers derived properties too: `<field>.density`, and any property
-  registered `allow_sph=True` (`gas_fraction`, `number_density`) by re-running its
-  own callback against the smoothed queries.  Geometry is shared with the strict
-  result, and a derived property that has not opted in is refused by name.
-  Smoothing lengths come from `sim['smooth']` by default, or from pynbody's own
-  k-d tree derivation with `bins.sph_render(smooth="kdtree")` — the only way to
-  render a snapshot whose families do not all carry the block, and the run
-  pynbody's `rho` uses.  The view is **callable** to change its settings
-  (`kernel`, `smooth_floor`, `wrap`, `smooth`), so the query spelling reaches the
-  constructor's options, and the result caches each configured view
-  ([ADR-0016](docs/adr/0016-where-sph-render-gets-its-smoothing-lengths.md)).
+These are the rules a change has to keep, and the test that says so.  When a rule
+gets in the way, change the rule deliberately and record the decision rather than
+working around it silently.
+
+| Invariant | Test |
+|-----------|------|
+| A `core/calculate` module imports only from the layers below it | `tests/test_layering_contract.py` |
+| Any package module imports only from its own layer or a lower one, and every module has a declared layer | `tests/test_package_layers_contract.py` |
+| The image layer knows the calculator layer only in `plot/image/data.py`, and only for typing | `tests/test_image_boundary_contract.py` |
+| `bins/` reaches `pynbodyext.plot` only inside functions, so the calculator import stays matplotlib-free | `tests/test_bins_import_weight.py` |
+| Only `bins/_pynbody_render.py` calls `pynbody.sph._render`, against a pinned upstream signature | `tests/test_pynbody_render_contract.py` |
+| Every node kind encodes, decodes and prints — and the encoder's kinds are exactly the printers' handlers | `tests/test_signature_roundtrip.py`, `tests/test_calculate_contract.py` |
+| Run options are declared once, and a misspelt override fails by name | `tests/test_calculate_contract.py` |
+| The three tree renderers (dependency, node, execution) share one walker and one truncation wording | `tests/test_calculate_render.py` |
 
 ## Image layer (`pynbodyext/plot/image/`)
 

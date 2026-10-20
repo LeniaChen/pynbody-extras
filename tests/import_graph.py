@@ -1,8 +1,8 @@
 """Read a package's run-time import edges, for the boundary tests.
 
 Shared by ``test_layering_contract.py`` (import direction inside the calculator
-core), ``test_image_boundary_contract.py`` (the image layer's side of ADR-0004)
-and ``test_package_layers_contract.py`` (the package-wide order).  All three need
+core), ``test_image_boundary_contract.py`` (the image layer's boundary) and
+``test_package_layers_contract.py`` (the package-wide order).  All three need
 the same things: the absolute module an ``ImportFrom`` names — relative imports
 included, because that is how a lower layer would reach upward — whether a block
 is ``TYPE_CHECKING``-only, and a walk over a file that collects the run-time ones.

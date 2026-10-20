@@ -78,6 +78,7 @@ data/
 
 # uv
 
-# Agent scratch docs (not version-controlled)
-docs/superpowers/
+# Local architecture and agent notes, not part of the shared docs yet.
 docs/adr/
+docs/agents/
+docs/superpowers/

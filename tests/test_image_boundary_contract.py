@@ -1,7 +1,7 @@
-"""The image layer's side of the ADR-0004 boundary.
+"""The image layer's boundary.
 
-ADR-0004: ``plot/image/`` takes plain 2-D arrays, and ``ImageData`` is the only
-place that knows the calculator layer.  The layer's annotations still *name* the
+``plot/image/`` takes plain 2-D arrays, and ``ImageData`` is the only place that
+knows the calculator layer.  The layer's annotations still *name* the
 binning types (``BinNDResult``, ``BinsArray``, ``BinAxis``), which is fine — a
 type-checking-only import costs nothing at run time, and the binning layer registers
 those names with :func:`pynbodyext.util._type.register_annotation_names` so that

@@ -99,7 +99,7 @@ bench = [
 # ======================================================================================
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py310"
 fix = true
 exclude = [
     "tests/",
@@ -146,8 +146,6 @@ ignore = [
     "E741",
     # allow module import not at top of file, important for notebooks, cyclic imports
     "E402",
-    # allow use (X,Y) in isinstance call
-    "UP038",
     # allow use Unpack[...] on python >= 3.11
     "UP044",
 ]
@@ -169,7 +167,7 @@ convention = "numpy"
 # mypy configuration
 # ======================================================================================
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.10"
 plugins = ["pynbodyext/_mypy_plugin.py"]
 
 ignore_missing_imports = true
@@ -194,3 +192,17 @@ testpaths = [
 console_output_style = "progress"
 
 log_cli = false
+
+# `make test` runs the fast loop (`-m "not data and not slow"`).
+# `make test-all` runs everything, including the pynbody test-data cases.
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "unit: a single module or function, no external data",
+    "contract: an architecture or public-API invariant",
+    "integration: several layers exercised together",
+    "slow: long-running; excluded from the fast loop",
+    "data: needs pynbody testdata (about 1.1 GB on first download)",
+]

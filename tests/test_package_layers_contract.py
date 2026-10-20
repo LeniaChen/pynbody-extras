@@ -3,7 +3,7 @@
 ``core/calculate`` has its own, stricter order (``test_layering_contract.py``).
 This file covers everything else — the layers above the core, the two independent
 subsystems beside it, and the package root — so "may A import B?" has one answer
-for the whole repository.  See ADR-0019.
+for the whole repository.
 
 The order, lowest first::
 
@@ -16,7 +16,7 @@ Notes a reader will want:
   ``bins`` reach into it for the extension — so it belongs underneath them.  The
   *facade* is ``pynbodyext.calculate``, the short public import path, and that is at
   the top of the core.
-- **``plot`` is low too.**  The image layer is generic 2-D-array work (ADR-0004): it
+- **``plot`` is low too.**  The image layer is generic 2-D-array work: it
   takes plain arrays, and the binning layer is one of its callers.  It names the
   calculator layer only under ``TYPE_CHECKING``, which this test does not count.
 - **A layer may import itself.**  Intra-layer cycles are cohesion, not disorder:

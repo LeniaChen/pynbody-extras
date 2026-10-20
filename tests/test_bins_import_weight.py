@@ -11,7 +11,7 @@ already loaded by the time this package runs whatever we do.)
 This is why ``bins/plot.py`` stays in the binning package as a thin adapter rather
 than moving next to the image layer: a mixin has to be importable at class-creation
 time, so relocating it would move the cost from "when you draw" to "when you
-import".  See ADR-0018.
+import".
 """
 
 from __future__ import annotations

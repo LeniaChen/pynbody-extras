@@ -704,6 +704,7 @@ def make_box_bins(sim: pynbody.SimSnap, *, nbins: int = 32):
     return (x @ y)(sim)
 
 
+@pytest.mark.data
 def test_a_mixed_snapshot_renders_with_smoothing_from_the_kdtree() -> None:
     """A set whose families do not all carry ``smooth`` needs the derivation."""
     sim = pynbody.load(GADGET2)
@@ -720,6 +721,7 @@ def test_a_mixed_snapshot_renders_with_smoothing_from_the_kdtree() -> None:
     assert rendered.sum() == pytest.approx(np.asarray(sim["mass"]).sum(), rel=0.05)
 
 
+@pytest.mark.data
 def test_kdtree_smoothing_is_pynbody_s_own_derivation() -> None:
     """``smooth="kdtree"`` is pynbody's derivation, not a second recipe of ours."""
     sim = pynbody.load(GADGET2)
@@ -754,6 +756,7 @@ def test_the_view_can_be_reconfigured_from_the_user_facing_spelling() -> None:
     assert default is bins.sph_render
 
 
+@pytest.mark.data
 def test_the_documented_volume_weight_reproduces_pynbody_s_own_render() -> None:
     """``@<field>`` takes any per-particle array, so the field convention is one
     assignment away — the recipe the docstrings give, checked against the renderer."""

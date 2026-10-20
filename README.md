@@ -8,11 +8,33 @@ calculators, binned profiles and ready-to-publish 2-D maps.
 
 ## Installation
 
+Requires Python 3.10–3.12.
+
+To use the package:
+
 ```bash
 git clone https://github.com/wx-ys/pynbody-extras.git
 cd pynbody-extras
-pip install -e .          # extras: [image] adaptive binning, [store] SQL result store
+python -m pip install -e ".[image,store]"
 ```
+
+The `image` extra adds adaptive binning (`powerbin`), and `store` adds the
+SQLAlchemy result store. A C++17 compiler with OpenMP builds the optional
+native extension; without one, installation falls back to the pure-Python
+implementation.
+
+To develop the package:
+
+```bash
+make setup      # uv-managed .venv (pinned by .python-version), all extras, git hooks
+make check      # lint + typecheck + fast tests; no testdata download
+make test-all   # full suite; downloads about 1.1 GB of pynbody testdata on first run
+```
+
+Install [uv](https://docs.astral.sh/uv/) first if it is not already available.
+`uv sync --all-extras` is the equivalent bootstrap if you prefer `uv` directly.
+The architecture vocabulary and the invariants the tests enforce live in
+[`CONTEXT.md`](CONTEXT.md).
 
 ---
 

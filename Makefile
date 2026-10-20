@@ -1,6 +1,8 @@
 
 
-PY ?= python
+VENV ?= .venv
+UV ?= uv
+PY ?= $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
 
 # Set to 0 to disable colors: `make help COLOR=0`
 COLOR ?= 1
@@ -29,10 +31,14 @@ help:
 	@printf "\n"
 	@printf "$(C_BOLD)$(C_GREEN)Usage$(C_RESET): $(C_CYAN)make <target>$(C_RESET)\n"
 	@printf "$(C_BOLD)$(C_GREEN)target$(C_RESET):\n"
-	@printf "  $(C_CYAN)test$(C_RESET)               Run pytest$(C_RESET)\n"
+	@printf "  $(C_CYAN)test$(C_RESET)               Run fast pytest (no testdata)$(C_RESET)\n"
 	@printf "  $(C_CYAN)lint$(C_RESET)               Run ruff lint$(C_RESET)\n"
 	@printf "  $(C_CYAN)format$(C_RESET)             Run ruff format$(C_RESET)\n"
 	@printf "  $(C_CYAN)typecheck$(C_RESET)          Run mypy$(C_RESET)\n"
+	@printf "  $(C_CYAN)check$(C_RESET)              lint + typecheck + fast tests$(C_RESET)\n"
+	@printf "  $(C_CYAN)test-all$(C_RESET)           Run the whole pytest suite$(C_RESET)\n"
+	@printf "  $(C_CYAN)test-data$(C_RESET)          Run only tests needing testdata$(C_RESET)\n"
+	@printf "  $(C_CYAN)setup$(C_RESET)              Create .venv and install git hooks$(C_RESET)\n"
 	@printf "\n"
 	@printf "  $(C_CYAN)bench-check$(C_RESET)        asv check (import/discover only)$(C_RESET)\n"
 	@printf "  $(C_CYAN)bench-setup$(C_RESET)        asv setup (create envs if not using existing)$(C_RESET)\n"
@@ -42,19 +48,38 @@ help:
 	@printf "  $(C_CYAN)bench-continuous$(C_RESET)   Regression gate: BASE..HEAD (FACTOR)$(C_RESET)\n"
 
 
-.PHONY: lint format typecheck test
+.PHONY: setup require-dev lint format typecheck test test-all test-data check
 
-lint:
-	ruff check ./pynbodyext
+# One-command bootstrap for a fresh clone. `.python-version` pins the interpreter.
+setup:
+	$(UV) python install
+	$(UV) sync --all-extras
+	$(VENV)/bin/pre-commit install
+	@printf "Ready. Run 'make check' for the fast loop.\n"
 
-format:
-	ruff format ./pynbodyext
+require-dev:
+	@$(PY) -c "import ruff, mypy" >/dev/null 2>&1 || { echo "Missing dev tools. Run 'make setup' first."; exit 1; }
 
-typecheck:
-	mypy pynbodyext
+lint: require-dev
+	$(PY) -m ruff check ./pynbodyext
 
+format: require-dev
+	$(PY) -m ruff format ./pynbodyext
+
+typecheck: require-dev
+	$(PY) -m mypy pynbodyext
+
+# Fast inner loop for agents: no testdata download, no long-running cases.
 test:
-	pytest
+	$(PY) -m pytest -m "not data and not slow"
+
+test-all:
+	$(PY) -m pytest
+
+test-data:
+	$(PY) -m pytest -m data
+
+check: lint typecheck test
 
 .PHONY: cpp-test
 cpp-test:
