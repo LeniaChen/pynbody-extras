@@ -57,3 +57,20 @@
   pre-existing stub drift, to be tracked separately.
 - Files: `tests/test_calculate_render.py`, `docs/work/BUG-0001/*`.
 - Env: Python 3.11.7 / pytest 9.0.2 (user's Mac).
+
+## 2026-10-20 — Claude @ cloud session
+
+- State: done
+- Done: PR #23 merged into `main`. The five new tests pass on the user's Mac.
+  Set `done`, ticked the acceptance criteria, added `Outcome`.
+- Next: archive with `make archive-item ID=BUG-0001` after the retention window
+  (next release or 30 days); the history row must point at the commit that
+  carries this entry.
+- Commands: `.venv/bin/python -m pytest tests/test_calculate_render.py -k "execution_tree or tree_lines"`;
+  `make test`.
+- Failing test: none for this item. `make test` has 6 unrelated failures,
+  opened as BUG-0002 (SPH 3-D render vs pynbody 2.3.3) and BUG-0003 (`vcirc`
+  without the native gravity extension).
+- Blockers: none.
+- Files: `docs/work/BUG-0001/*`.
+- Env: macOS / Python 3.11.7 / pytest 9.0.2 / pynbody 2.3.3.

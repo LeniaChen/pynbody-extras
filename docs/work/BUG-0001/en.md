@@ -89,16 +89,16 @@ implicit contract that `tree_lines(children=...)` is a pure accessor.
 
 ## Acceptance criteria
 
-- [ ] `result.execution_tree` includes every reachable node for the fixture
+- [x] `result.execution_tree` includes every reachable node for the fixture
       above (five lines, including the shared filter on both branches).
-- [ ] A shared node is rendered again as a hit, but its children are not
+- [x] A shared node is rendered again as a hit, but its children are not
       expanded a second time.
-- [ ] The parent/child shape matches `result.report_node_tree()` for the same
+- [x] The parent/child shape matches `result.report_node_tree()` for the same
       result.
-- [ ] The `rich` HTML card's Execution tree `<pre>` contains `MassSum`,
+- [x] The `rich` HTML card's Execution tree `<pre>` contains `MassSum`,
       `TempMean`, and `RBelow`.
-- [ ] `max_depth=0` still uses the shared wording `... N nodes hidden`.
-- [ ] A regression test fails on the current code and passes after the fix.
+- [x] `max_depth=0` still uses the shared wording `... N nodes hidden`.
+- [x] A regression test fails on the current code and passes after the fix.
 
 ## Test plan
 
@@ -140,6 +140,20 @@ only the root line. The fix covers that case too, and it has its own test.
 - Redesigning the execution-tree labels or performance metadata.
 - Changing the `simple` HTML card's drill-down layout.
 - Adding new cache or observer fields.
+
+## Outcome
+
+Fixed in PR #23 (`cb61b15`, `21e0a08`).
+
+- `result.execution_tree` now renders all five lines for the `make_pipeline()`
+  fixture; the second `RBelow` is `[cache=hit]`.
+- Red: on the old code the execution tree was the root line alone, and
+  `test_tree_lines_asks_for_each_lines_children_at_most_once` failed
+  (`children("root")` was called twice).
+- Green: all five new tests in `tests/test_calculate_render.py` pass on
+  macOS / Python 3.11.7. In the same `make test` run the suite is
+  797 passed / 6 failed / 3 skipped; the 6 failures are unrelated and are
+  tracked as BUG-0002 and BUG-0003.
 
 ## Open questions
 
