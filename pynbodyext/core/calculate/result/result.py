@@ -75,12 +75,13 @@ from pynbodyext.core.calculate.diagnostics.observer import (
 )
 from pynbodyext.core.calculate.diagnostics.perf import PerfSummary, PhaseRecord
 from pynbodyext.core.calculate.display import (
+    Block,
+    Card,
     InfoView,
+    Pre,
     TextReport,
     compact_repr,
     format_time,
-    html_pre,
-    mimebundle,
 )
 
 from .enums import NodeKind, NodeStatus, RecordPolicy
@@ -139,8 +140,8 @@ class ErrorInfo(InfoView):
             rows.append(("phase", self.phase))
         return rows
 
-    def _display_body(self) -> str:
-        return html_pre(self.traceback_text) if self.traceback_text else ""
+    def _display_blocks(self) -> list[Block]:
+        return [Pre(self.traceback_text)] if self.traceback_text else []
 
 
 @dataclass(slots=True)
@@ -209,13 +210,16 @@ class ResultNode:
     def _repr_pretty_(self, printer: Any, cycle: bool) -> None:
         printer.text("ResultNode(...)" if cycle else repr(self))
 
-    def _repr_html_(self) -> str:
+    def _repr_card(self) -> Card:
         from .repr import ResultRepr
 
-        return ResultRepr.result_node_html(self)
+        return ResultRepr.result_node_card(self)
+
+    def _repr_html_(self) -> str:
+        return self._repr_card().html()
 
     def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> dict[str, str]:
-        return mimebundle(repr(self), self._repr_html_())
+        return self._repr_card().mimebundle(repr(self))
 
 
 @dataclass(slots=True, repr=False)
@@ -224,7 +228,7 @@ class ProvenanceInfo(InfoView):
 
     Renders the same rows in every display style, so typing ``result.provenance``
     in a notebook shows the calculator hash / simulation identity / wall time
-    exactly as the ``Result`` card does — in the ``rich`` card, the ``github``
+    exactly as the ``Result`` card does — in the ``rich`` card, the ``simple``
     ``<table>`` or the plain-text summary.
     """
 
@@ -309,13 +313,16 @@ class Result(Generic[T]):
     def _repr_pretty_(self, printer: Any, cycle: bool) -> None:
         printer.text("Result(...)" if cycle else repr(self))
 
-    def _repr_html_(self) -> str:
+    def _repr_card(self) -> Card:
         from .repr import ResultRepr
 
-        return ResultRepr.result_html(self)
+        return ResultRepr.result_card(self)
+
+    def _repr_html_(self) -> str:
+        return self._repr_card().html()
 
     def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> dict[str, str]:
-        return mimebundle(repr(self), self._repr_html_())
+        return self._repr_card().mimebundle(repr(self))
 
     @property
     def ok(self) -> bool:

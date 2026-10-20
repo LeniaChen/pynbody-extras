@@ -194,7 +194,7 @@ from .bins import (
 from .diagnostics.observer import AccessEvent, AccessObservation
 from .diagnostics.perf import PerfCollector
 from .diagnostics.trace import TraceCollector, TraceEvent
-from .display import get_repr_style, reset_repr_style, set_repr_style
+from .display import get_repr_style, repr_style, reset_repr_style, set_repr_style
 from .nodes.base import CalculatorBase, CombinedCalculator
 from .nodes.declarative import dataclass_calc
 from .nodes.expr import ConstantProperty, LambdaProperty, OpProperty
@@ -243,6 +243,7 @@ __all__ = [
     "get_repr_style",
     "set_repr_style",
     "reset_repr_style",
+    "repr_style",
     "Bin1D",
     "BinND",
     "BinAxis",

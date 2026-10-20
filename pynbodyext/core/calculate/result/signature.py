@@ -62,6 +62,7 @@ __all__ = [
     "calculator_pack",
     "calculator_unpack",
     "calculator_pretty_init_args",
+    "calculator_parameter_rows",
 ]
 
 
@@ -568,6 +569,38 @@ def calculator_pretty_init_args(calculator: Any, *, inline_array_bytes: int = DE
     if not init_payload:
         return ""
     return TreePrinter.dataclass_args({"class": path, "init": init_payload})
+
+
+def calculator_parameter_rows(
+    calculator: Any, *, inline_array_bytes: int = DEFAULT_INLINE_ARRAY_BYTES
+) -> list[tuple[str, str, bool]]:
+    """Return ``(name, value, is_default)`` for every signature parameter of *calculator*.
+
+    The table counterpart of :func:`calculator_pretty_init_args`: every parameter
+    that takes part in the signature, in declaration order — keyword-only ones
+    too, since a table has room for them — with the value spelled the way the
+    signature expression spells it and a flag for "left at its declared default".
+    Built from the same :func:`_encode_init_entries` the payload uses, so the
+    table cannot disagree with the identity it describes.
+    """
+    if not is_dataclass(calculator):
+        return []
+
+    from .render import SignaturePrinter, default_init_payload
+
+    explicit = {name: enc.value for name, enc in _encode_init_entries(calculator, "init", inline_array_bytes)}
+    defaults = default_init_payload(type(calculator), inline_array_bytes=inline_array_bytes)
+    field_map = {item.name: item for item in dataclass_fields(calculator)}
+    rows: list[tuple[str, str, bool]] = []
+    for spec in collect_param_specs(type(calculator)):
+        item = field_map.get(spec.name)
+        if item is None or not item.init or not spec.signature:
+            continue
+        if spec.name in explicit:
+            rows.append((spec.name, SignaturePrinter.value(explicit[spec.name]), False))
+        elif spec.name in defaults:
+            rows.append((spec.name, SignaturePrinter.value(defaults[spec.name]), True))
+    return rows
 
 
 # ---------------------------------------------------------------------------

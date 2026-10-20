@@ -100,7 +100,7 @@ def test_perf_summary_is_reachable() -> None:
     assert "Total" in table or "phase" in table.lower()
 
 
-def test_view_object_repr_is_compact_in_plain() -> None:
+def test_view_object_repr_is_compact() -> None:
     from pynbodyext.core.calculate.display import ViewObject
 
     class Dummy(ViewObject):
@@ -114,7 +114,7 @@ def test_view_object_repr_is_compact_in_plain() -> None:
     assert repr(obj) == "Dummy(a=1)"
 
 
-def test_view_object_html_renders_sections_in_github_and_plain() -> None:
+def test_view_object_html_renders_sections_in_simple() -> None:
     from pynbodyext.core.calculate.display import ViewObject, reset_repr_style, set_repr_style
 
     class Dummy(ViewObject):
@@ -125,7 +125,7 @@ def test_view_object_html_renders_sections_in_github_and_plain() -> None:
             return [("config", "a=1"), ("tree", "root{__}child")]
 
     obj = Dummy()
-    for style in ("github", "plain"):
+    for style in ("simple",):
         set_repr_style(style)
         try:
             html = obj._repr_html_()
@@ -289,11 +289,11 @@ def test_calculator_base_config_and_dependency_tree_attributes() -> None:
     assert {row[0] for row in scoped._repr_summary_rows()} >= {"label", "record", "scope"}
 
 
-def test_calculator_base_repr_html_tail_hint_in_github_plain() -> None:
+def test_calculator_simple_card_names_the_dependency_tree() -> None:
     from pynbodyext.core.calculate.display import reset_repr_style, set_repr_style
 
     calc = make_pipeline()
-    for style in ("github", "plain"):
+    for style in ("simple",):
         set_repr_style(style)
         try:
             html = calc._repr_html_()
@@ -321,21 +321,17 @@ def test_result_section_attributes_render_without_a_call() -> None:
         assert isinstance(report._repr_html_(), str)
 
 
-def test_result_repr_html_tail_hint_in_github_plain() -> None:
-    from pynbodyext.core.calculate.display import reset_repr_style, set_repr_style
+def test_result_simple_card_names_its_drilldown_attributes() -> None:
+    """The simple card lists, as attributes, exactly the sections it does not inline."""
+    from pynbodyext.core.calculate.display import repr_style
 
     result = _result()
-    hint = (
-        "Use .named_values, .warnings, .errors, .provenance, "
-        ".execution_tree, .performance and .cache for details"
-    )
-    for style in ("github", "plain"):
-        set_repr_style(style)
-        try:
-            html = result._repr_html_()
-            assert hint in html
-        finally:
-            reset_repr_style()
+    with repr_style("simple"):
+        html = result._repr_html_()
+    details = html.split("<strong>Details:</strong>")[1]
+    for attr in ("named_values", "provenance", "execution_tree", "performance", "cache"):
+        assert f"<code>.{attr}</code>" in details
+    assert "()" not in details, "a drill-down is an attribute, never a call"
 
 
 def test_provenance_shows_the_same_fields_in_every_style() -> None:
@@ -364,7 +360,7 @@ def test_provenance_shows_the_same_fields_in_every_style() -> None:
     finally:
         reset_repr_style()
 
-    for style in ("rich", "github"):
+    for style in ("rich", "simple"):
         set_repr_style(style)
         try:
             standalone = provenance._repr_html_()
@@ -412,7 +408,7 @@ def test_text_report_is_a_str_that_renders() -> None:
     assert report.splitlines() == ["root", "└─ leaf"]
     assert repr(report) == repr("root\n└─ leaf")
 
-    for style in ("rich", "github", "plain"):
+    for style in ("rich", "simple"):
         set_repr_style(style)
         try:
             html = report._repr_html_()
@@ -467,60 +463,82 @@ def _snake(title: str) -> str:
 
 
 def test_result_card_sections_are_nameable_attributes() -> None:
-    """Every card section is reachable as an attribute of the same name.
+    """Every drill-down section of a card is an attribute of the same name.
 
-    This is the contract behind the github/plain hint: a reader sees a section
-    title in the rich card, and the same name (snake_cased) as an attribute
-    whose repr shows that section — no method call.
+    This is the contract behind the simple card: a section it does not inline is
+    listed as ``.<attr>``, and that attribute must exist and show the section, so
+    a reader of a notebook on GitHub can reach everything the rich card folds.
     """
-    from pynbodyext.core.calculate.display import reset_repr_style, set_repr_style
+    from pynbodyext.core.calculate.display import repr_style
     from pynbodyext.core.calculate.result.result import ErrorInfo
 
     result = _result()
     result.warnings.append("synthetic warning")
     result.errors.append(ErrorInfo(error_type="RuntimeError", message="synthetic error"))
 
-    set_repr_style("rich")
-    try:
+    with repr_style("rich"):
         titles = _card_titles(result._repr_html_())
-    finally:
-        reset_repr_style()
-
     assert titles == ["Named values", "Warnings", "Errors", "Provenance", "Execution tree", "Performance", "Cache"]
+
+    card = result._repr_card()
+    assert card.drilldown_attrs() == tuple(_snake(title) for title in titles)
+    for attr in card.drilldown_attrs():
+        assert hasattr(result, attr), f"section .{attr} has no attribute"
+
+    with repr_style("simple"):
+        html = result._repr_html_()
+    for attr in card.drilldown_attrs():
+        assert f"<code>.{attr}</code>" in html
     for title in titles:
-        assert hasattr(result, _snake(title)), f"section {title!r} has no .{_snake(title)} attribute"
-
-    set_repr_style("github")
-    try:
-        hint_html = result._repr_html_()
-    finally:
-        reset_repr_style()
-    for title in titles:
-        assert f".{_snake(title)}" in hint_html
-    assert "()" not in hint_html.split("<pre>")[1]
+        assert f"<h5>{title}</h5>" not in html, "a drill-down section is named, not inlined, in the simple card"
 
 
-def test_calculator_card_section_is_a_nameable_attribute() -> None:
-    from pynbodyext.core.calculate.display import reset_repr_style, set_repr_style
+def test_calculator_card_sections() -> None:
+    """Parameters and Signature are inlined everywhere; the tree is a drill-down."""
+    from pynbodyext.core.calculate.display import repr_style
+    from pynbodyext.filters import Sphere
 
-    calc = make_pipeline()
-    set_repr_style("rich")
-    try:
+    calc = Sphere("30 kpc")
+    with repr_style("rich"):
         titles = _card_titles(calc._repr_html_())
-    finally:
-        reset_repr_style()
+    assert titles == ["Parameters", "Signature", "Dependency tree"]
 
-    assert titles == ["Dependency tree"]
-    for title in titles:
-        assert hasattr(calc, _snake(title))
+    card = calc._repr_card()
+    assert card.drilldown_attrs() == ("dependency_tree",)
+    assert hasattr(calc, "dependency_tree")
 
-    set_repr_style("github")
-    try:
-        hint_html = calc._repr_html_()
-    finally:
-        reset_repr_style()
-    assert ".dependency_tree" in hint_html
-    assert "()" not in hint_html.split("<pre>")[1]
+    with repr_style("simple"):
+        html = calc._repr_html_()
+    assert "<h5>Parameters</h5>" in html
+    assert "<h5>Signature</h5>" in html
+    assert "<code>.dependency_tree</code>" in html
+
+
+def test_calculator_card_shows_parameters_and_signature() -> None:
+    """The card spells out every parameter and the identity a result is stored under."""
+    from pynbodyext.core.calculate.display import html_escape, repr_style
+    from pynbodyext.filters import Sphere
+
+    calc = Sphere("30 kpc")
+    signature = calc.to_signature()
+    for style in ("rich", "simple"):
+        with repr_style(style):
+            html = calc._repr_html_()
+        assert html_escape('"30 kpc"') in html  # the given radius
+        assert "(0, 0, 0)" in html  # the default centre ...
+        assert "default" in html  # ... marked as a default
+        assert signature.hash in html  # the full hash, not only the short one
+        assert html_escape(signature.pretty()) in html
+        assert "reconstructible" in html
+
+
+def test_a_pipeline_card_has_no_parameter_section() -> None:
+    """Only dataclass calculators have declared parameters to list."""
+    from pynbodyext.core.calculate.display import repr_style
+
+    with repr_style("rich"):
+        titles = _card_titles(make_pipeline()._repr_html_())
+    assert titles == ["Signature", "Dependency tree"]
 
 
 def _emitted_card_classes(html: str) -> set[str]:

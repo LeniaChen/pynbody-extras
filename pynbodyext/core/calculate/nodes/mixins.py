@@ -24,15 +24,16 @@ from pynbody import units
 from pynbody.array import SimArray
 
 from pynbodyext.core.calculate.display import (
+    Badge,
+    Block,
+    Card,
+    Code,
+    Fields,
+    Pre,
+    Section,
     TextReport,
-    _style,
     compact_repr,
     display_value,
-    html_badge,
-    html_card,
-    html_details,
-    html_pre,
-    mimebundle,
 )
 from pynbodyext.core.calculate.nodes._tree import render_tree
 from pynbodyext.core.calculate.params import (
@@ -408,25 +409,58 @@ class _CalculatorDisplayMixin(_CalculatorContract):
     def _repr_pretty_(self, printer: Any, cycle: bool) -> None:
         printer.text(f"{self.__class__.__name__}(...)" if cycle else repr(self))
 
-    def _repr_html_(self) -> str:
+    #: Summary rows rendered as badges, and their tone.
+    _REPR_BADGE_TONES: ClassVar[dict[str, str]] = {"kind": "info", "cache": "neutral", "record": "neutral", "scope": "neutral"}
+
+    def _repr_parameter_blocks(self) -> list[Block]:
+        """The *Parameters* section: every signature parameter and its value."""
+        from pynbodyext.core.calculate.result.signature import calculator_parameter_rows
+
+        rows = [
+            (name, (Code(value), Badge("default")) if is_default else Code(value))
+            for name, value, is_default in calculator_parameter_rows(self)
+        ]
+        if not rows:
+            return []
+        return [Section("Parameters", [Fields(rows, monospace=True)], collapsible=False)]
+
+    def _repr_signature_blocks(self) -> list[Block]:
+        """The *Signature* section: the identity a result is stored under."""
+        signature = self.to_signature()
+        rows: list[tuple[str, Any]] = [
+            ("expression", Code(signature.pretty())),
+            ("hash", Code(signature.hash)),
+            (
+                "reconstructible",
+                Badge("yes", "ok") if signature.constructible else Badge("no", "warn"),
+            ),
+        ]
+        if signature.non_constructible_paths:
+            rows.append(("not reconstructible at", ", ".join(signature.non_constructible_paths)))
+        return [Section("Signature", [Fields(rows, nowrap=True, monospace=True)])]
+
+    def _repr_card(self) -> Card:
+        """What this calculator shows in a notebook, in every repr style."""
         rows: list[tuple[str, Any]] = []
         for key, value in self._repr_summary_rows():
-            if key in {"kind", "cache", "record", "scope"}:
-                tone = "info" if key == "kind" else "neutral"
-                rows.append((key, html_badge(display_value(value), tone=tone)))
+            if key == "signature":
+                rows.append((key, Code(value)))
+            elif key in self._REPR_BADGE_TONES:
+                rows.append((key, Badge(display_value(value), self._REPR_BADGE_TONES[key])))
             else:
                 rows.append((key, value))
+        blocks: list[Block] = [
+            *self._repr_parameter_blocks(),
+            *self._repr_signature_blocks(),
+            Section("Dependency tree", [Pre(self.dependency_tree)], attr="dependency_tree"),
+        ]
+        return Card(self.__class__.__name__, rows, blocks)
 
-        body_parts: list[str] = []
-        if _style() == "rich":
-            body_parts.append(html_details("Dependency tree", html_pre(self.dependency_tree), open=False))
-        else:
-            body_parts.append(html_pre("Use .dependency_tree for details"))
-
-        return html_card(self.__class__.__name__, rows, body="".join(body_parts), escape_values=False)
+    def _repr_html_(self) -> str:
+        return self._repr_card().html()
 
     def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> dict[str, str]:
-        return mimebundle(repr(self), self._repr_html_())
+        return self._repr_card().mimebundle(repr(self))
 
     @property
     def dependency_tree(self) -> TextReport:

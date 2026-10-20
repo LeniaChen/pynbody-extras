@@ -162,6 +162,7 @@ from .core.calculate import (
     RuntimeCalculatorBase,
     TransformBase,
     get_repr_style,
+    repr_style,
     reset_repr_style,
     set_repr_style,
 )
@@ -178,4 +179,5 @@ __all__ = [
     "get_repr_style",
     "set_repr_style",
     "reset_repr_style",
+    "repr_style",
 ]
