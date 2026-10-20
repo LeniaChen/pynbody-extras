@@ -107,10 +107,10 @@ cpp-test:
 
 .PHONY: bench-check bench-setup bench bench-v bench-continuous
 bench-check:
-	asv check
+	$(PY) -m asv check
 
 bench-setup:
-	asv -vv setup
+	$(PY) -m asv -vv setup
 
 # ---- Generic benchmark entrypoints ----
 # Usage:
@@ -122,14 +122,14 @@ ASV_ARGS ?=
 BENCH_FLAG := $(if $(strip $(BENCH)),--bench "$(BENCH)",)
 
 bench:
-	./scripts/asv_run.sh $(BENCH_FLAG) -- $(ASV_ARGS)
+	$(PY) -m asv run $(BENCH_FLAG) -- $(ASV_ARGS)
 
 bench-v:
-	./scripts/asv_run.sh -v $(BENCH_FLAG) -- $(ASV_ARGS)
+	$(PY) -m asv run -v $(BENCH_FLAG) -- $(ASV_ARGS)
 
 # Run benchmarks at latest commit only (single revision)
 bench-head:
-	asv run $(BENCH_FLAG) HEAD^! -- $(ASV_ARGS)
+	$(PY) -m asv run $(BENCH_FLAG) HEAD^! -- $(ASV_ARGS)
 
 
 # Continuous regression gate
@@ -138,4 +138,4 @@ HEAD ?= HEAD
 FACTOR ?= 1.10
 
 bench-continuous:
-	./scripts/asv_run.sh --continuous $(BENCH_FLAG) --base "$(BASE)" --head "$(HEAD)" --factor "$(FACTOR)" -- $(ASV_ARGS)
+	$(PY) -m asv continuous --factor "$(FACTOR)" --split "$(BASE)" "$(HEAD)" $(BENCH_FLAG) -- $(ASV_ARGS)

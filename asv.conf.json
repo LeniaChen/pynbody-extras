@@ -7,7 +7,7 @@
     "project": "pynbodyext",
 
     // The project's homepage
-    "project_url": "https://github.com/GalaxySimAnalytics/pynbody-extras",
+    "project_url": "https://github.com/wx-ys/pynbody-extras",
 
     // The URL or local path of the source code repository for the
     // project being benchmarked
@@ -80,5 +80,5 @@
     // number of builds to keep, per environment.
     "build_cache_size": 8,
 
-    "show_commit_url": "https://github.com/GalaxySimAnalytics/pynbody-extras/commit/"
+    "show_commit_url": "https://github.com/wx-ys/pynbody-extras/commit/"
 }
